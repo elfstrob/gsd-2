@@ -1,0 +1,100 @@
+# .github/workflows/sync-upstream.yml
+# Drop this file into each forked repo to auto-sync with upstream.
+# It runs daily, can be triggered manually, and creates a PR if there
+# are conflicts instead of force-pushing over your customizations.
+
+name: Sync Upstream
+
+on:
+  schedule:
+    - cron: '0 6 * * *'     # Daily at 6am UTC (11pm Pacific)
+  workflow_dispatch:          # Manual trigger from GitHub Actions tab
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          # This value changes per repo. Set it in repo Settings > Secrets > Actions
+          # as UPSTREAM_REPO, or hardcode it below.
+          #
+          # For get-shit-done: https://github.com/gsd-build/get-shit-done.git
+          # For gsd-2:         https://github.com/gsd-build/gsd-2.git
+          # For superpowers:   https://github.com/obra/superpowers.git
+          UPSTREAM="${{ vars.UPSTREAM_REPO }}"
+          if [ -z "$UPSTREAM" ]; then
+            echo "::error::Set UPSTREAM_REPO as a repository variable (Settings > Secrets and variables > Actions > Variables)"
+            exit 1
+          fi
+          git remote add upstream "$UPSTREAM"
+          git fetch upstream main
+
+      - name: Attempt fast-forward merge
+        id: merge
+        run: |
+          BEHIND=$(git rev-list --count HEAD..upstream/main)
+          if [ "$BEHIND" -eq 0 ]; then
+            echo "Already up to date with upstream."
+            echo "status=current" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "Fork is $BEHIND commits behind upstream."
+
+          # Try a clean merge
+          if git merge upstream/main --no-edit; then
+            echo "status=merged" >> "$GITHUB_OUTPUT"
+            git push origin main
+            echo "Successfully merged $BEHIND upstream commits."
+          else
+            # Conflict: abort merge, create a PR branch instead
+            git merge --abort
+            echo "status=conflict" >> "$GITHUB_OUTPUT"
+
+            BRANCH="upstream-sync/$(date +%Y-%m-%d)"
+            git checkout -b "$BRANCH"
+            git merge upstream/main --no-edit || true
+            # Push the conflict branch so you can resolve manually
+            git add -A
+            git commit -m "chore: upstream sync with conflicts ($(date +%Y-%m-%d))" || true
+            git push origin "$BRANCH" --force
+            echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create PR on conflict
+        if: steps.merge.outputs.status == 'conflict'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const branch = '${{ steps.merge.outputs.branch }}';
+            const { data: pr } = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `chore: sync upstream (${new Date().toISOString().slice(0,10)})`,
+              head: branch,
+              base: 'main',
+              body: [
+                '## Upstream Sync',
+                '',
+                'Automated sync found merge conflicts that need manual resolution.',
+                '',
+                'Review the conflicts, resolve them, and merge this PR to stay current.',
+              ].join('\n'),
+            });
+            console.log(`Created PR #${pr.number}: ${pr.html_url}`);
