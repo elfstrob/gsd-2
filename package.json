@@ -130,8 +130,7 @@
     "strip-ansi": "^7.1.0",
     "undici": "^7.24.2",
     "yaml": "^2.8.2",
-    "zod-to-json-schema": "^3.24.6",
-    "node-domexception": "file:./pkg/node-domexception-stub"
+    "zod-to-json-schema": "^3.24.6"
   },
   "devDependencies": {
     "@types/node": "^24.12.0",
@@ -150,11 +149,7 @@
     "fsevents": "~2.3.3",
     "koffi": "^2.9.0"
   },
-  "bundleDependencies": [
-    "node-domexception"
-  ],
   "overrides": {
-    "gaxios": "7.1.4",
-    "node-domexception": "$node-domexception"
+    "gaxios": "7.1.4"
   }
 }
