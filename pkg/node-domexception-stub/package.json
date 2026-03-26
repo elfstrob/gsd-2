@@ -1,0 +1,7 @@
+{
+  "name": "node-domexception",
+  "version": "1.0.0",
+  "description": "Stub replacing deprecated node-domexception; Node 22+ has native DOMException",
+  "main": "index.js",
+  "license": "MIT"
+}
