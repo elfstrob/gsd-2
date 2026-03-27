@@ -6,6 +6,184 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.56.0] - 2026-03-27
+
+### Added
+- **parallel**: /gsd parallel watch — native TUI overlay for worker monitoring (#2806)
+
+### Fixed
+- **ci**: copy web/components to dist-test for xterm-theme test (#2891)
+- **gsd**: prefer PREFERENCES.md in worktrees (#2796)
+- **gsd**: resume auto-mode after transient provider pause (#2822)
+- **parallel**: resolve session lock contention and 3 related parallel-mode bugs (#2184) (#2800)
+- **web**: improve light theme terminal contrast (#2819)
+- **gsd**: preserve auto start model through discuss (#2837)
+
+### Changed
+- **test**: compile unit tests with esbuild, reclassify integration tests, fix node_modules symlink (#2809)
+
+## [2.55.0] - 2026-03-27
+
+### Added
+- colorized headless verbose output with thinking, phases, cost, and durations (#2886)
+- headless text mode observability + skip UAT pause (#2867)
+
+### Fixed
+- **cli**: let gsd update bypass version mismatch gate (#2845)
+- **contracts**: add isWorkspaceEvent guard + close routeLiveInteractionEvent exhaustiveness gap (#2878)
+- **gsd**: use project root for prior-slice dispatch guard (#2863)
+- **gsd**: include queue context in milestone planning prompts (#2846)
+- detect monorepo roots in project discovery to prevent workspace fragmentation (#2849)
+- **bg-shell**: recover from deleted cwd in timers (#2850)
+- **gsd**: enable dynamic routing without models section (#2851)
+- **interactive**: fully remove providers from /providers (#2852)
+
+## [2.54.0] - 2026-03-27
+
+### Added
+- Headless Integration Hardening & Release (M002) (#2811)
+- **parallel**: add real-time TUI monitor dashboard with self-healing (#2799)
+
+## [2.53.0] - 2026-03-27
+
+### Added
+- **vscode**: activity feed, workflow controls, session forking, enhanced code lens [2/3] (#2656)
+- **gsd**: enable safety mechanisms by default (snapshots, pre-merge checks) (#2678)
+
+### Fixed
+- hydrate collected secrets for current session (#2788)
+- resolve stash pop conflicts and stop swallowing merge errors (#2780)
+- treat any extracted verdict as terminal in isValidationTerminal (#2774)
+- use localStorage for auth token to enable multi-tab usage (#2785)
+- guard activeMilestone.id access in discuss and headless paths (#2776)
+- clean up zombie parallel workers stuck in error state (#2782)
+- relax milestone validation gate to accept prose evidence (#2779)
+- write milestone reports to project root instead of worktree (#2778)
+- auto-resolve build artifact conflicts in milestone merge (#2777)
+- let rate-limit errors attempt model fallback before pausing (#2775)
+- prevent gsd next from self-killing via stale crash lock (#2784)
+- add shell flag for Windows spawn in VSCode extension (#2781)
+
+### Changed
+- **gsd**: extract duplicated status guards and validation helpers (#2767)
+
+## [2.52.0] - 2026-03-27
+
+### Added
+- **vscode**: status bar, file decorations, bash terminal, session tree, conversation history, code lens [1/2] (#2651)
+- **web**: Dark mode contrast — raise token floor and flatten opacity tier system (#2734)
+- Wire --bare mode across headless → pi-coding-agent → resource-loa…
+- Added runId generation on prompt/steer/follow_up commands, event…
+- Added RPC protocol v2 types, init handshake with version detectio…
+
+### Fixed
+- auto-mode stops after provider errors (#2762) (#2764)
+- add missing runtime stage name to Dockerfile (#2765)
+- make transaction() re-entrant and add slice_dependencies to initSchema
+- remove preferences.md from ROOT_STATE_FILES to prevent back-sync overwrite
+- wire tool handlers through DB port layer, remove _getAdapter from all tools
+- **gsd**: move state machine guards inside transaction in 5 tool handlers (#2752)
+- reconcile disk milestones into empty DB before deriveStateFromDb guard (#2686)
+- **gsd**: seed preferences.md into auto-mode worktrees (#2693)
+- **claude-import**: discover marketplace plugins nested inside container directories (#2718)
+- exempt interactive tools from idle watchdog stall detection (#2676)
+- guard allSlicesDone against vacuous truth on empty slice array (#2679)
+- block complete-milestone dispatch when VALIDATION is needs-remediation (#2682)
+- **gsd**: sync milestone DB status in parkMilestone and unparkMilestone (#2696)
+- **web**: auth token gate — synthetic 401 on missing token, unauthenticated boot state, and recovery screen (#2740)
+- **remote-questions**: empty-key entry in auth.json shadows valid Discord bot token (#2737)
+- idle watchdog stalled-tool detection overridden by filesystem activity (#2697)
+- surface exhausted Claude SDK streams as errors (#2719)
+- **docker**: overhaul fragile setup, adopt proven container patterns (#2716)
+- **gsd**: write DB before disk in validate-milestone to match engine pattern (#2742)
+- **gsd**: extract and honor milestone argument in /gsd auto and /gsd next (#2729)
+- **windows**: prevent EINVAL by disabling detached process groups on Win32 (#2744)
+- **gsd**: delete orphaned verification_evidence rows on complete-task rollback (#2746)
+- **gsd**: wire setLogBasePath into engine init to resurrect audit log (#2745)
+- Remove premature pendingTools.delete in webSearchResult handler (#2743)
+- **gsd**: remove redundant assertions that fail TS2367 typecheck
+- include preferences.md in worktree sync and initial seed
+
+### Changed
+- **pi-ai**: replace model-ID pattern matching with capability metadata (#2548)
+- **gsd-db**: comprehensive SQLite audit fixes — indexes, caching, safety, reconciliation
+- rename preferences.md to PREFERENCES.md for consistency (#2700) (#2738)
+- **gsd**: unify three overlapping error classifiers into single classify→decide→act pipeline
+
+## [2.51.0] - 2026-03-26
+
+### Added
+- add /terminal slash command for direct shell execution (#2349)
+- **auto**: check verification class compliance before milestone completion (#2623)
+- **validate**: extract followUps and knownLimitations in parseSummary (#2622)
+- managed RTK integration with opt-in preference and web UI toggle (#2620)
+- **validate**: inject verification classes into milestone validation prompt (#2621)
+- **skills**: add 19 wshobson/agents packs with 40 curated skills
+- **skills**: add 11 new skill packs covering major frameworks and languages
+- **skills**: add SQLite/SQL detection, SQL optimization pack, and Redis pack
+- **skills**: add Prisma and Supabase/Postgres database packs
+- **skills**: add cloud platform packs (Firebase, Azure, AWS) and improve detection
+- **skills**: curate catalog — add top ecosystem skills, drop low-quality bundled ones
+- **skills**: parse SDKROOT from pbxproj for platform-aware iOS skill matching
+- **skills**: use ~/.agents/skills/ as primary skills directory with curated catalog
+
+### Fixed
+- improve light theme warning contrast (#2674)
+- honor explicit model config when model is not in known tier map (#2643)
+- exclude lastReasoning from retry diagnostic to prevent hallucination loops (#2663)
+- persist rewrite-docs attempt counter to disk for session restart survival (#2671)
+- add non-null assertions for parseUnitId optional fields in tests
+- update triage-dispatch static analysis tests for enqueueSidecar helper
+- **notifications**: prefer terminal-notifier over osascript on macOS (#2633)
+- classify stream-truncation JSON parse errors as transient (#2636)
+- call ensureDbOpen() before slice queries in /gsd discuss (#2640)
+- **prompts**: use --body-file for forensics issue creation (#2641)
+- isLockProcessAlive should return true for own PID (#2642)
+- check ASSESSMENT file for UAT verdict in checkNeedsRunUat (#2646)
+- use pauseAuto instead of stopAuto for warning-level dispatch stops (#2666)
+- signal malformed tool arguments in toolcall_end event (#2647)
+- prevent double mergeAndExit on milestone completion (#2648)
+- respect queue-order.json in DB-backed state derivation (#2649)
+- **vscode**: support Remote SSH by adding extensionKind and error handler (#2650)
+- update DB task status in writeBlockerPlaceholder for execute-task (#2657)
+- normalize path separators in matchesProjectFileMarker for Windows
+- **tests**: remove obsolete doctor filesystem test
+- **tests**: update doctor issue code to db_done_task_no_summary
+- restore PR files lost during merge conflict resolution
+- **skills**: address QA round 3
+- **skills**: address QA round 2
+- **skills**: address QA round 1
+- **skills**: prioritize ecosystem dir and skip legacy after migration
+- **skills**: address QA round 23
+- **skills**: address QA round 22
+- **skills**: address QA round 21
+- **skills**: address QA round 20
+- **skills**: address QA round 19
+- **skills**: address QA round 18
+- **skills**: address QA round 17
+- **skills**: address QA round 16
+- **skills**: address QA round 15
+- **skills**: address QA round 14
+- **skills**: address QA round 13
+- **skills**: address QA round 12
+- **skills**: address QA round 11
+- **skills**: address QA round 10
+- **skills**: address QA round 8
+- **skills**: detect FastAPI via dependency scanning
+- **skills**: address QA round 6
+- **skills**: address QA round 5
+- **skills**: address QA round 4
+- **skills**: address QA round 3
+- **skills**: address QA round 2
+- **skills**: defer greenfield skill selection to post-design phase
+- **skills**: add migration from ~/.gsd/agent/skills/ to ~/.agents/skills/
+- **gsd extension**: detect initialized projects in health widget
+- **gsd extension**: detect initialized projects in health widget
+
+### Changed
+- consolidate docs, remove stale artifacts, and repo hygiene (#2665)
+- extract runSafely helper for try-catch-debug-continue pattern (#2611)
+
 ## [2.50.0] - 2026-03-26
 
 ### Added
@@ -1933,7 +2111,13 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.50.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.56.0...HEAD
+[2.56.0]: https://github.com/gsd-build/gsd-2/compare/v2.55.0...v2.56.0
+[2.55.0]: https://github.com/gsd-build/gsd-2/compare/v2.54.0...v2.55.0
+[2.54.0]: https://github.com/gsd-build/gsd-2/compare/v2.53.0...v2.54.0
+[2.53.0]: https://github.com/gsd-build/gsd-2/compare/v2.52.0...v2.53.0
+[2.52.0]: https://github.com/gsd-build/gsd-2/compare/v2.51.0...v2.52.0
+[2.51.0]: https://github.com/gsd-build/gsd-2/compare/v2.50.0...v2.51.0
 [2.50.0]: https://github.com/gsd-build/gsd-2/compare/v2.49.0...v2.50.0
 [2.49.0]: https://github.com/gsd-build/gsd-2/compare/v2.48.0...v2.49.0
 [2.48.0]: https://github.com/gsd-build/gsd-2/compare/v2.47.0...v2.48.0

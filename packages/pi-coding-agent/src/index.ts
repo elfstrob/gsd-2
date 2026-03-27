@@ -125,6 +125,8 @@ export type {
 	TurnStartEvent,
 	UserBashEvent,
 	UserBashEventResult,
+	BashTransformEvent,
+	BashTransformEventResult,
 	WidgetPlacement,
 	WriteToolCallEvent,
 } from "./core/extensions/index.js";
@@ -312,8 +314,11 @@ export {
 	type RpcClientOptions,
 	type RpcEventListener,
 	type RpcCommand,
+	type RpcInitResult,
+	type RpcProtocolVersion,
 	type RpcResponse,
 	type RpcSessionState,
+	type RpcV2Event,
 } from "./modes/index.js";
 // RPC JSONL utilities
 export { attachJsonlLineReader, serializeJsonLine } from "./modes/rpc/jsonl.js";

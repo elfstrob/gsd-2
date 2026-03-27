@@ -34,7 +34,9 @@ function assertExtensionIndexExists(agentDir: string, extensionName: string): vo
 
 test("app-paths resolve to ~/.gsd/", async () => {
   const { appRoot, agentDir, sessionsDir, authFilePath } = await import("../app-paths.ts");
-  const home = process.env.HOME!;
+  // Use homedir() — process.env.HOME is undefined on Windows (uses USERPROFILE instead)
+  const { homedir } = await import("node:os");
+  const home = homedir();
 
   assert.equal(appRoot, join(home, ".gsd"), "appRoot is ~/.gsd/");
   assert.equal(agentDir, join(home, ".gsd", "agent"), "agentDir is ~/.gsd/agent/");
@@ -100,6 +102,9 @@ test("loader sets all 4 GSD_ env vars and PI_PACKAGE_DIR", async (t) => {
   assert.ok(loaderSrc.includes("GSD_BIN_PATH"), "loader sets GSD_BIN_PATH");
   assert.ok(loaderSrc.includes("GSD_WORKFLOW_PATH"), "loader sets GSD_WORKFLOW_PATH");
   assert.ok(loaderSrc.includes("GSD_BUNDLED_EXTENSION_PATHS"), "loader sets GSD_BUNDLED_EXTENSION_PATHS");
+  assert.ok(loaderSrc.includes("applyRtkProcessEnv"), "loader applies RTK environment bootstrap");
+  const rtkSrc = readFileSync(join(projectRoot, "src", "rtk.ts"), "utf-8");
+  assert.ok(rtkSrc.includes("RTK_TELEMETRY_DISABLED"), "RTK helper disables telemetry for managed sessions");
   assert.ok(loaderSrc.includes("serializeBundledExtensionPaths"), "loader uses shared bundled path serializer");
   assert.ok(loaderSrc.includes("join(delimiter)"), "loader uses platform delimiter for NODE_PATH");
 
@@ -180,6 +185,19 @@ test("loader MIN_NODE_MAJOR matches package.json engines field", () => {
 
   assert.strictEqual(loaderMin, engineMin,
     `loader MIN_NODE_MAJOR (${loaderMin}) must match package.json engines.node (>=${engineMin}.0.0)`);
+});
+
+test("cli.ts lets gsd update bypass the managed-resource mismatch gate", () => {
+  const cliSrc = readFileSync(join(projectRoot, "src", "cli.ts"), "utf-8");
+  const updateBranchIndex = cliSrc.indexOf("if (cliFlags.messages[0] === 'update')")
+  const mismatchGateIndex = cliSrc.indexOf("exitIfManagedResourcesAreNewer(agentDir)")
+
+  assert.ok(updateBranchIndex !== -1, "cli.ts contains an update branch")
+  assert.ok(mismatchGateIndex !== -1, "cli.ts contains the managed-resource mismatch gate")
+  assert.ok(
+    updateBranchIndex < mismatchGateIndex,
+    "gsd update must run before the managed-resource mismatch gate",
+  )
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
