@@ -300,6 +300,32 @@ test('Scenario 4: Completion state mapping', () => {
   assert.deepStrictEqual(doneSlice?.tasks[0]?.estimate, '2h', 'completion: task estimate from summary duration');
 });
 
+test('Scenario 4b: Unchecked roadmap slice with all plan summaries upgrades to complete slice', () => {
+
+  const project = emptyProject({
+    roadmap: flatRoadmap([
+      roadmapEntry(1, 'historical-phase', false),
+    ]),
+    phases: {
+      '1-historical-phase': makePhase('1-historical-phase', 1, 'historical-phase', {
+        plans: { '01': makePlan('01'), '02': makePlan('02') },
+        summaries: {
+          '01': makeSummary('01'),
+          '02': makeSummary('02'),
+        },
+      }),
+    },
+  });
+
+  const result = transformToGSD(project);
+  const slice = result.milestones[0]?.slices[0];
+
+  assert.ok(slice?.tasks.every(t => t.done) === true, 'stale-roadmap: all tasks imported as done from summaries');
+  assert.ok(slice?.done === true, 'stale-roadmap: all summarized tasks upgrade slice to done');
+  assert.ok(slice?.summary !== null, 'stale-roadmap: slice summary generated even when roadmap checkbox was unchecked');
+  assert.ok(slice?.summary?.whatHappened.includes('Summary body for plan 01') ?? false, 'stale-roadmap: slice summary aggregates task summary bodies');
+});
+
 // ─── Scenario 5: Research Consolidation ────────────────────────────────────
 
 test('Scenario 5: Research consolidation', () => {

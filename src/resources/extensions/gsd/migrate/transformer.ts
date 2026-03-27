@@ -163,7 +163,12 @@ function mapSlice(
     tasks = planNumbers.map((pn, i) => mapTask(phase.plans[pn], i, phase.summaries));
   }
 
-  const done = entry.done;
+  // GSDv1 roadmaps could be stale: a phase checkbox might remain unchecked even
+  // after every plan wrote its SUMMARY.md. When that happens, the migrated slice
+  // should still be treated as complete so we emit the missing S##-SUMMARY.md
+  // instead of forcing the project into a false "summarizing" state.
+  const allTasksDone = tasks.length > 0 && tasks.every(task => task.done);
+  const done = entry.done || allTasksDone;
   const sliceSummary = done && phase ? buildSliceSummary(phase) : null;
 
   return {

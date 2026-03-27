@@ -947,6 +947,8 @@ export async function discoverAndLoadExtensions(
 	cwd: string,
 	agentDir: string = getAgentDir(),
 	eventBus?: EventBus,
+	/** Optional filter applied to each discovered extension path. Return false to exclude. */
+	extensionFilter?: (entryPath: string) => boolean,
 ): Promise<LoadExtensionsResult> {
 	const allPaths: string[] = [];
 	const seen = new Set<string>();
@@ -978,7 +980,8 @@ export async function discoverAndLoadExtensions(
 
 	// 2. Global extensions: agentDir/extensions/
 	const globalExtDir = path.join(agentDir, "extensions");
-	addPaths(discoverExtensionsInDir(globalExtDir));
+	const globalDiscovered = discoverExtensionsInDir(globalExtDir);
+	addPaths(extensionFilter ? globalDiscovered.filter(extensionFilter) : globalDiscovered);
 
 	// 3. Explicitly configured paths
 	for (const p of configuredPaths) {
