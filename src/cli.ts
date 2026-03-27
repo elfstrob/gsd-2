@@ -373,10 +373,15 @@ const configuredProvider = settingsManager.getDefaultProvider()
 const configuredModel = settingsManager.getDefaultModel()
 const allModels = modelRegistry.getAll()
 const availableModels = modelRegistry.getAvailable()
-const configuredExists = configuredProvider && configuredModel &&
-  allModels.some((m) => m.provider === configuredProvider && m.id === configuredModel)
-const configuredAvailable = configuredProvider && configuredModel &&
-  availableModels.some((m) => m.provider === configuredProvider && m.id === configuredModel)
+// Extension-registered providers (e.g. claude-code-cli) aren't loaded yet at
+// this point, so their models won't appear in allModels. Don't overwrite
+// the user's settings when the provider is extension-backed.
+const EXTENSION_PROVIDERS = new Set(['claude-code'])
+const isExtensionProvider = configuredProvider && EXTENSION_PROVIDERS.has(configuredProvider)
+const configuredExists = isExtensionProvider || (configuredProvider && configuredModel &&
+  allModels.some((m) => m.provider === configuredProvider && m.id === configuredModel))
+const configuredAvailable = isExtensionProvider || (configuredProvider && configuredModel &&
+  availableModels.some((m) => m.provider === configuredProvider && m.id === configuredModel))
 
 if (!configuredModel || !configuredExists) {
   // Model not configured at all, or removed from registry — pick a fallback.
@@ -386,11 +391,11 @@ if (!configuredModel || !configuredExists) {
     (piDefault
       ? availableModels.find((m) => m.provider === piDefault.provider && m.id === piDefault.model)
       : undefined) ||
-    availableModels.find((m) => m.provider === 'openai' && m.id === 'gpt-5.4') ||
-    availableModels.find((m) => m.provider === 'openai') ||
     availableModels.find((m) => m.provider === 'anthropic' && m.id === 'claude-opus-4-6') ||
     availableModels.find((m) => m.provider === 'anthropic' && m.id.includes('opus')) ||
     availableModels.find((m) => m.provider === 'anthropic') ||
+    availableModels.find((m) => m.provider === 'openai' && m.id === 'gpt-5.4') ||
+    availableModels.find((m) => m.provider === 'openai') ||
     availableModels[0]
   if (preferred) {
     settingsManager.setDefaultModelAndProvider(preferred.provider, preferred.id)
