@@ -13,7 +13,7 @@ import type { GSDState } from "./types.js";
 import type { GSDPreferences } from "./preferences.js";
 import type { UatType } from "./files.js";
 import { loadFile, extractUatType, loadActiveOverrides } from "./files.js";
-import { isDbAvailable, getMilestoneSlices, getPendingGates, markAllGatesOmitted } from "./gsd-db.js";
+import { isDbAvailable, getMilestoneSlices, getPendingGates, markAllGatesOmitted, getMilestone } from "./gsd-db.js";
 import { extractVerdict, isAcceptableUatVerdict } from "./verdict-parser.js";
 
 import {
@@ -200,7 +200,7 @@ export const DISPATCH_RULES: DispatchRule[] = [
           uatContent ?? "",
           basePath,
         ),
-        pauseAfterDispatch: uatType !== "artifact-driven" && uatType !== "browser-executable" && uatType !== "runtime-executable",
+        pauseAfterDispatch: !process.env.GSD_HEADLESS && uatType !== "artifact-driven" && uatType !== "browser-executable" && uatType !== "runtime-executable",
       };
     },
   },
@@ -626,6 +626,25 @@ export const DISPATCH_RULES: DispatchRule[] = [
     match: async ({ state, mid, midTitle, basePath }) => {
       if (state.phase !== "completing-milestone") return null;
 
+      // Safety guard (#2675): block completion when VALIDATION verdict is
+      // needs-remediation. The state machine treats needs-remediation as
+      // terminal (to prevent validate-milestone loops per #832), but
+      // completing-milestone should NOT proceed — remediation work is needed.
+      const validationFile = resolveMilestoneFile(basePath, mid, "VALIDATION");
+      if (validationFile) {
+        const validationContent = await loadFile(validationFile);
+        if (validationContent) {
+          const verdict = extractVerdict(validationContent);
+          if (verdict === "needs-remediation") {
+            return {
+              action: "stop",
+              reason: `Cannot complete milestone ${mid}: VALIDATION verdict is "needs-remediation". Address the remediation findings and re-run validation, or update the verdict manually.`,
+              level: "warning",
+            };
+          }
+        }
+      }
+
       // Safety guard (#1368): verify all roadmap slices have SUMMARY files.
       const missingSlices = findMissingSummaries(basePath, mid);
       if (missingSlices.length > 0) {
@@ -646,6 +665,38 @@ export const DISPATCH_RULES: DispatchRule[] = [
           level: "error",
         };
       }
+
+      // Verification class compliance: if operational verification was planned,
+      // ensure the validation output documents it before allowing completion.
+      try {
+        if (isDbAvailable()) {
+          const milestone = getMilestone(mid);
+          if (milestone?.verification_operational &&
+              milestone.verification_operational.toLowerCase() !== "none") {
+            const validationPath = resolveMilestoneFile(basePath, mid, "VALIDATION");
+            if (validationPath) {
+              const validationContent = await loadFile(validationPath);
+              if (validationContent) {
+                // Accept either the structured template format (table with MET/N/A)
+                // or prose evidence patterns the validation agent may emit.
+                const structuredMatch =
+                  validationContent.includes("Operational") &&
+                  (validationContent.includes("MET") || validationContent.includes("N/A"));
+                const proseMatch =
+                  /[Oo]perational[\s:][^\n]*(?:pass|verified|confirmed|met|complete|true|yes|addressed|covered|n\/a|not\s+applicable)/i.test(validationContent);
+                const hasOperationalCheck = structuredMatch || proseMatch;
+                if (!hasOperationalCheck) {
+                  return {
+                    action: "stop" as const,
+                    reason: `Milestone ${mid} has planned operational verification ("${milestone.verification_operational.substring(0, 100)}") but the validation output does not address it. Re-run validation with verification class awareness, or update the validation to document operational compliance.`,
+                    level: "warning" as const,
+                  };
+                }
+              }
+            }
+          }
+        }
+      } catch { /* fall through — don't block on DB errors */ }
 
       return {
         action: "dispatch",

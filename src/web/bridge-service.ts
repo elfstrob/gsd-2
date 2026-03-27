@@ -397,6 +397,17 @@ function filterAndSortSessions(
   return scored.map((entry) => entry.session);
 }
 
+export interface RtkSessionSavings {
+  commands: number;
+  inputTokens: number;
+  outputTokens: number;
+  savedTokens: number;
+  savingsPct: number;
+  totalTimeMs: number;
+  avgTimeMs: number;
+  updatedAt: string;
+}
+
 export interface AutoDashboardData {
   active: boolean;
   paused: boolean;
@@ -408,6 +419,9 @@ export interface AutoDashboardData {
   basePath: string;
   totalCost: number;
   totalTokens: number;
+  rtkSavings?: RtkSessionSavings | null;
+  /** Whether RTK is enabled via experimental.rtk preference. False when not opted in. */
+  rtkEnabled?: boolean;
 }
 
 export interface BridgeLastError {
@@ -512,12 +526,54 @@ export interface ProjectDetectionSignals {
   hasCargo?: boolean;
   hasGoMod?: boolean;
   hasPyproject?: boolean;
+  /** True when the directory looks like a monorepo root (workspaces, lerna, pnpm-workspace, etc.) */
+  isMonorepo?: boolean;
   fileCount: number;
 }
 
 export interface ProjectDetection {
   kind: ProjectDetectionKind;
   signals: ProjectDetectionSignals;
+}
+
+/**
+ * Detect whether a directory looks like a monorepo root.
+ *
+ * Checks for common monorepo indicators:
+ * - `pnpm-workspace.yaml` (pnpm workspaces)
+ * - `lerna.json` (Lerna)
+ * - `package.json` with a `workspaces` field (npm/yarn workspaces)
+ * - `rush.json` (Rush)
+ * - `nx.json` (Nx)
+ * - `turbo.json` (Turborepo)
+ *
+ * This is intentionally cheap — file existence checks only, with a single
+ * JSON parse for `package.json` workspaces (which we're already reading
+ * in many code paths). No deep directory scanning.
+ */
+export function detectMonorepo(dirPath: string, checkExists?: (path: string) => boolean): boolean {
+  const exists = checkExists ?? (getBridgeDeps().existsSync ?? existsSync);
+
+  // Fast checks — file existence only
+  if (exists(join(dirPath, "pnpm-workspace.yaml"))) return true;
+  if (exists(join(dirPath, "lerna.json"))) return true;
+  if (exists(join(dirPath, "rush.json"))) return true;
+  if (exists(join(dirPath, "nx.json"))) return true;
+  if (exists(join(dirPath, "turbo.json"))) return true;
+
+  // Check package.json for workspaces field (npm/yarn workspaces)
+  const packageJsonPath = join(dirPath, "package.json");
+  if (exists(packageJsonPath)) {
+    try {
+      const raw = readFileSync(packageJsonPath, "utf-8");
+      const pkg = JSON.parse(raw) as Record<string, unknown>;
+      if (pkg.workspaces != null) return true;
+    } catch {
+      // Malformed JSON or unreadable — not a monorepo indicator
+    }
+  }
+
+  return false;
 }
 
 export function detectProjectKind(projectCwd: string): ProjectDetection {
@@ -530,6 +586,7 @@ export function detectProjectKind(projectCwd: string): ProjectDetection {
   const hasCargo = checkExists(join(projectCwd, "Cargo.toml"));
   const hasGoMod = checkExists(join(projectCwd, "go.mod"));
   const hasPyproject = checkExists(join(projectCwd, "pyproject.toml"));
+  const isMonorepo = detectMonorepo(projectCwd, checkExists);
 
   // Count top-level non-dot entries (cheap heuristic for "has code")
   let fileCount = 0;
@@ -548,6 +605,7 @@ export function detectProjectKind(projectCwd: string): ProjectDetection {
     hasCargo,
     hasGoMod,
     hasPyproject,
+    isMonorepo,
     fileCount,
   };
 
