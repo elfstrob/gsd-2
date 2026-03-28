@@ -6,6 +6,49 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.58.0] - 2026-03-28
+
+### Added
+- Added 6 discord.js shard/error/warn event listeners for reconnect…
+
+### Fixed
+- **auto**: guard startAuto() against concurrent invocation (#2923)
+- **auto-dispatch**: widen operational verification gate regex (fixes #2866) (#2898)
+- **parallel**: three bugs preventing reliable parallel worker execution (#2801)
+- **web**: fall back to project totals when dashboard metrics are zero (#2847)
+- **gsd**: parse raw YAML under preference headings (#2794)
+- **gsd**: persist verification classes in milestone validation (#2820)
+- **gsd**: guard reconcileWorktreeDb against same-file ATTACH corruption (#2825)
+- **web**: skip shutdown in daemon mode so server survives tab close (#2842)
+- **headless**: skip execution_complete for multi-turn commands (auto/next)
+- Fixed 3 bugs (launchd JSON parsing, login race condition, interact…
+
+## [2.57.0] - 2026-03-28
+
+### Added
+- Extended DaemonConfig with control_channel_id and orchestrator se…
+- Created pure-function event formatters (10 functions) mapping RPC…
+- **models**: add GLM-5.1 to Z.AI provider in custom models
+- Added discord.js v14, DiscordBot class with auth guard and lifecy…
+- Created packages/daemon workspace package with DaemonConfig/LogLe…
+- headless text mode shows tool calls + skip UAT pause in headless
+- Wire --resume flag to resolve session IDs via prefix matching and…
+- Migrated headless orchestrator to use execution_complete events,…
+
+### Fixed
+- **headless**: match "completed" status from RPC v2 in exit code mapper
+- show external drives in directory browser on Linux
+- Regenerate package-lock.json after merge
+- **gsd**: resume cold auto bootstrap from db
+- **gsd**: preserve first auto unit model after session reset
+- Accept flags after positional command in headless arg parser
+- **gsd**: discover project subagents in .gsd
+- **model-routing**: use honest unitTypes for discuss dispatches and map all auto-dispatch phases
+- revert jsonl.ts to inline implementation — @gsd-build/rpc-client not available at source-level test time in CI
+
+### Changed
+- auto-commit after complete-milestone
+
 ## [2.56.0] - 2026-03-27
 
 ### Added
@@ -2111,7 +2154,9 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.56.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.58.0...HEAD
+[2.58.0]: https://github.com/gsd-build/gsd-2/compare/v2.57.0...v2.58.0
+[2.57.0]: https://github.com/gsd-build/gsd-2/compare/v2.56.0...v2.57.0
 [2.56.0]: https://github.com/gsd-build/gsd-2/compare/v2.55.0...v2.56.0
 [2.55.0]: https://github.com/gsd-build/gsd-2/compare/v2.54.0...v2.55.0
 [2.54.0]: https://github.com/gsd-build/gsd-2/compare/v2.53.0...v2.54.0
