@@ -5,7 +5,7 @@ import type { ExtensionAPI } from "@gsd/pi-coding-agent";
 import { createBashTool, createEditTool, createReadTool, createWriteTool } from "@gsd/pi-coding-agent";
 
 import { DEFAULT_BASH_TIMEOUT_SECS } from "../constants.js";
-import { setLogBasePath } from "../workflow-logger.js";
+import { setLogBasePath, logWarning } from "../workflow-logger.js";
 
 /**
  * Resolve the correct DB path for the current working directory.
@@ -57,6 +57,18 @@ export function resolveProjectRootDbPath(basePath: string): string {
     }
   }
 
+  // External-state layout: ~/.gsd/projects/<hash>/worktrees/<MID>/...
+  // Resolve to ~/.gsd/projects/<hash>/gsd.db (the canonical project DB) (#2952).
+  const extRe = /[/\\]\.gsd[/\\]projects[/\\][a-f0-9]+[/\\]worktrees(?:[/\\]|$)/;
+  const extMatch = extRe.exec(basePath);
+  if (extMatch) {
+    const matchStr = extMatch[0];
+    // Find the "/worktrees" portion within the match and slice up to it
+    const wtIdx = matchStr.search(/[/\\]worktrees(?:[/\\]|$)/);
+    const projectStateRoot = basePath.slice(0, extMatch.index + wtIdx);
+    return join(projectStateRoot, "gsd.db");
+  }
+
   return join(basePath, ".gsd", "gsd.db");
 }
 
@@ -92,9 +104,7 @@ export async function ensureDbOpen(): Promise<boolean> {
             const { migrateFromMarkdown } = await import("../md-importer.js");
             migrateFromMarkdown(basePath);
           } catch (err) {
-            process.stderr.write(
-              `gsd-db: ensureDbOpen auto-migration failed: ${(err as Error).message}\n`,
-            );
+            logWarning("bootstrap", `ensureDbOpen auto-migration failed: ${(err as Error).message}`);
           }
         }
         return opened;
@@ -106,20 +116,10 @@ export async function ensureDbOpen(): Promise<boolean> {
       return opened;
     }
 
-    process.stderr.write(
-      `gsd-db: ensureDbOpen failed — no .gsd directory found (resolvedPath=${resolveProjectRootDbPath(basePath)}, cwd=${basePath})\n`,
-    );
+    logWarning("bootstrap", "ensureDbOpen failed — no .gsd directory found");
     return false;
   } catch (err) {
-    const basePath = process.cwd();
-    const diagnostic = {
-      resolvedPath: resolveProjectRootDbPath(basePath),
-      cwd: basePath,
-      error: (err as Error).message ?? String(err),
-    };
-    process.stderr.write(
-      `gsd-db: ensureDbOpen failed — ${JSON.stringify(diagnostic)}\n`,
-    );
+    logWarning("bootstrap", `ensureDbOpen failed: ${(err as Error).message ?? String(err)}`);
     return false;
   }
 }

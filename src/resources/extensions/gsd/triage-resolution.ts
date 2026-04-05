@@ -148,10 +148,17 @@ export function executeBacktrack(
   capture: CaptureEntry,
 ): string | null {
   try {
-    // Extract target milestone from capture text or resolution
-    const targetMatch = (capture.resolution ?? capture.text)
-      .match(/\b(M\d{3}(?:-[a-z0-9]{6})?)\b/);
-    const targetMilestoneId = targetMatch?.[1] ?? null;
+    // Extract target milestone from capture text or resolution.
+    // Filter out the current milestone ID to avoid picking it as the backtrack target
+    // when the text mentions both current and target milestones (e.g. "backtrack from M004 to M003").
+    const sourceText = capture.resolution ?? capture.text;
+    const allMatches = [...sourceText.matchAll(/\b(M\d{3}(?:-[a-z0-9]{6})?)\b/g)]
+      .map(m => m[1])
+      .filter(id => id !== currentMilestoneId);
+    // Reject ambiguous multi-target strings — if more than one distinct target remains,
+    // don't guess; let the user clarify.
+    const uniqueTargets = [...new Set(allMatches)];
+    const targetMilestoneId = uniqueTargets.length === 1 ? uniqueTargets[0] : null;
 
     const ts = new Date().toISOString();
     const triggerPath = join(gsdRoot(basePath), "BACKTRACK-TRIGGER.md");

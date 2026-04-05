@@ -272,6 +272,10 @@ export interface SaveRequirementFields {
 /**
  * Save a new requirement to DB and regenerate REQUIREMENTS.md.
  * Auto-assigns the next ID via nextRequirementId().
+ *
+ * The ID computation and insert are wrapped in a single transaction
+ * to prevent parallel race conditions (same pattern as saveDecisionToDb).
+ *
  * Returns the assigned ID.
  */
 export async function saveRequirementToDb(
@@ -281,24 +285,37 @@ export async function saveRequirementToDb(
   try {
     const db = await import('./gsd-db.js');
 
-    const id = await nextRequirementId();
+    // Atomic ID assignment + insert inside a transaction.
+    const id = db.transaction(() => {
+      const adapter = db._getAdapter();
+      if (!adapter) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
 
-    const requirement: Requirement = {
-      id,
-      class: fields.class,
-      status: fields.status ?? 'active',
-      description: fields.description,
-      why: fields.why,
-      source: fields.source,
-      primary_owner: fields.primary_owner ?? '',
-      supporting_slices: fields.supporting_slices ?? '',
-      validation: fields.validation ?? '',
-      notes: fields.notes ?? '',
-      full_content: '',
-      superseded_by: null,
-    };
+      const row = adapter
+        .prepare('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as max_num FROM requirements')
+        .get();
+      const maxNum = row ? (row['max_num'] as number | null) : null;
+      const nextId = (maxNum == null || isNaN(maxNum))
+        ? 'R001'
+        : `R${String(maxNum + 1).padStart(3, '0')}`;
 
-    db.upsertRequirement(requirement);
+      const requirement: Requirement = {
+        id: nextId,
+        class: fields.class,
+        status: fields.status ?? 'active',
+        description: fields.description,
+        why: fields.why,
+        source: fields.source,
+        primary_owner: fields.primary_owner ?? '',
+        supporting_slices: fields.supporting_slices ?? '',
+        validation: fields.validation ?? '',
+        notes: fields.notes ?? '',
+        full_content: '',
+        superseded_by: null,
+      };
+
+      db.upsertRequirement(requirement);
+      return nextId;
+    });
 
     // Fetch all requirements for full file regeneration
     const adapter = db._getAdapter();
@@ -358,6 +375,11 @@ export interface SaveDecisionFields {
 /**
  * Save a new decision to DB and regenerate DECISIONS.md.
  * Auto-assigns the next ID via nextDecisionId().
+ *
+ * The ID computation (SELECT MAX) and insert are wrapped in a single
+ * transaction to prevent parallel tool calls from computing the same ID
+ * and silently overwriting each other (#3326, #3339, #3459).
+ *
  * Returns the assigned ID.
  */
 export async function saveDecisionToDb(
@@ -367,18 +389,33 @@ export async function saveDecisionToDb(
   try {
     const db = await import('./gsd-db.js');
 
-    const id = await nextDecisionId();
+    // Atomic ID assignment + insert inside a transaction to prevent
+    // parallel calls from racing on the same MAX(id) value.
+    const id = db.transaction(() => {
+      const adapter = db._getAdapter();
+      if (!adapter) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
 
-    db.upsertDecision({
-      id,
-      when_context: fields.when_context ?? '',
-      scope: fields.scope,
-      decision: fields.decision,
-      choice: fields.choice,
-      rationale: fields.rationale,
-      revisable: fields.revisable ?? 'Yes',
-      made_by: fields.made_by ?? 'agent',
-      superseded_by: null,
+      const row = adapter
+        .prepare('SELECT MAX(CAST(SUBSTR(id, 2) AS INTEGER)) as max_num FROM decisions')
+        .get();
+      const maxNum = row ? (row['max_num'] as number | null) : null;
+      const nextId = (maxNum == null || isNaN(maxNum))
+        ? 'D001'
+        : `D${String(maxNum + 1).padStart(3, '0')}`;
+
+      db.upsertDecision({
+        id: nextId,
+        when_context: fields.when_context ?? '',
+        scope: fields.scope,
+        decision: fields.decision,
+        choice: fields.choice,
+        rationale: fields.rationale,
+        revisable: fields.revisable ?? 'Yes',
+        made_by: fields.made_by ?? 'agent',
+        superseded_by: null,
+      });
+
+      return nextId;
     });
 
     // Fetch all decisions (including superseded for the full register)
@@ -432,6 +469,23 @@ export async function saveDecisionToDb(
       adapter?.prepare('DELETE FROM decisions WHERE id = :id').run({ ':id': id });
       throw diskErr;
     }
+    // #2661: When a decision defers a slice, update the slice status in the DB
+    // so the dispatcher skips it. Without this, STATE.md and DECISIONS.md are
+    // in split-brain: the decision says "deferred" but the state still says
+    // "active", causing auto-mode to keep dispatching the deferred work.
+    try {
+      const sliceRef = extractDeferredSliceRef(fields);
+      if (sliceRef) {
+        db.updateSliceStatus(sliceRef.milestoneId, sliceRef.sliceId, 'deferred');
+      }
+    } catch (deferErr) {
+      // Non-fatal — log but don't fail the decision save
+      logError('manifest', 'failed to update deferred slice status', {
+        fn: 'saveDecisionToDb',
+        error: String((deferErr as Error).message),
+      });
+    }
+
     // Invalidate file-read caches so deriveState() sees the updated markdown.
     // Do NOT clear the artifacts table — we just wrote to it intentionally.
     invalidateStateCache();
@@ -443,6 +497,39 @@ export async function saveDecisionToDb(
     logError('manifest', 'saveDecisionToDb failed', { fn: 'saveDecisionToDb', error: String((err as Error).message) });
     throw err;
   }
+}
+
+/**
+ * Extract a milestone/slice reference from a deferral decision.
+ *
+ * Detects deferrals by checking:
+ *   - scope contains "defer" (e.g., "deferral", "defer")
+ *   - choice or decision contains "defer" + an M###/S## pattern
+ *
+ * Returns { milestoneId, sliceId } if found, null otherwise.
+ */
+export function extractDeferredSliceRef(
+  fields: Pick<SaveDecisionFields, 'scope' | 'decision' | 'choice'>,
+): { milestoneId: string; sliceId: string } | null {
+  const isDeferral =
+    /\bdefer(?:ral|red|ring|s)?\b/i.test(fields.scope) ||
+    /\bdefer(?:ral|red|ring|s)?\b/i.test(fields.choice) ||
+    /\bdefer(?:ral|red|ring|s)?\b/i.test(fields.decision);
+
+  if (!isDeferral) return null;
+
+  // Look for M###/S## pattern in choice first, then decision
+  const slicePattern = /\b(M\d{3,4})\/(S\d{2,3})\b/;
+  const choiceMatch = fields.choice.match(slicePattern);
+  if (choiceMatch) {
+    return { milestoneId: choiceMatch[1], sliceId: choiceMatch[2] };
+  }
+  const decisionMatch = fields.decision.match(slicePattern);
+  if (decisionMatch) {
+    return { milestoneId: decisionMatch[1], sliceId: decisionMatch[2] };
+  }
+
+  return null;
 }
 
 // ─── Update Requirement in DB + Regenerate Markdown ───────────────────────

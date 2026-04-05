@@ -13,10 +13,11 @@ import { getDiscussionMilestoneId } from "../guided-flow.js";
 import { loadToolApiKeys } from "../commands-config.js";
 import { loadFile, saveFile, formatContinue } from "../files.js";
 import { deriveState } from "../state.js";
-import { getAutoDashboardData, isAutoActive, isAutoPaused, markToolEnd, markToolStart } from "../auto.js";
+import { getAutoDashboardData, isAutoActive, isAutoPaused, markToolEnd, markToolStart, recordToolInvocationError } from "../auto.js";
 import { isParallelActive, shutdownParallel } from "../parallel-orchestrator.js";
 import { checkToolCallLoop, resetToolCallLoopGuard } from "./tool-call-loop-guard.js";
 import { saveActivityLog } from "../activity-log.js";
+import { resetAskUserQuestionsCache } from "../../ask-user-questions.js";
 
 // Skip the welcome screen on the very first session_start — cli.ts already
 // printed it before the TUI launched. Only re-print on /clear (subsequent sessions).
@@ -31,6 +32,7 @@ export function registerHooks(pi: ExtensionAPI): void {
   pi.on("session_start", async (_event, ctx) => {
     resetWriteGateState();
     resetToolCallLoopGuard();
+    resetAskUserQuestionsCache();
     await syncServiceTierStatus(ctx);
 
     // Apply show_token_cost preference (#1515)
@@ -67,6 +69,7 @@ export function registerHooks(pi: ExtensionAPI): void {
   pi.on("session_switch", async (_event, ctx) => {
     resetWriteGateState();
     resetToolCallLoopGuard();
+    resetAskUserQuestionsCache();
     clearDiscussionFlowState();
     await syncServiceTierStatus(ctx);
     loadToolApiKeys();
@@ -78,6 +81,7 @@ export function registerHooks(pi: ExtensionAPI): void {
 
   pi.on("agent_end", async (event, ctx: ExtensionContext) => {
     resetToolCallLoopGuard();
+    resetAskUserQuestionsCache();
     await handleAgentEnd(pi, event, ctx);
   });
 
@@ -256,6 +260,14 @@ export function registerHooks(pi: ExtensionAPI): void {
 
   pi.on("tool_execution_end", async (event) => {
     markToolEnd(event.toolCallId);
+    // #2883: Capture tool invocation errors (malformed/truncated JSON arguments)
+    // so postUnitPreVerification can break the retry loop instead of re-dispatching.
+    if (event.isError && event.toolName.startsWith("gsd_")) {
+      const errorText = typeof event.result === "string"
+        ? event.result
+        : (typeof event.result?.content?.[0]?.text === "string" ? event.result.content[0].text : String(event.result));
+      recordToolInvocationError(event.toolName, errorText);
+    }
   });
 
   pi.on("model_select", async (_event, ctx) => {
@@ -321,5 +333,13 @@ export function registerHooks(pi: ExtensionAPI): void {
     if (!tier || !supportsServiceTier(modelId)) return payload;
     payload.service_tier = tier;
     return payload;
+  });
+
+  // Capability-aware model routing hook (ADR-004)
+  // Extensions can override model selection by returning { modelId: "..." }
+  // Return undefined to let the built-in capability scoring proceed.
+  pi.on("before_model_select", async (_event) => {
+    // Default: no override — let capability scoring handle selection
+    return undefined;
   });
 }
