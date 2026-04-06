@@ -18,6 +18,7 @@ import { loadFile, parseSummary, resolveAllOverrides } from "./files.js";
 import { loadPrompt } from "./prompt-loader.js";
 import {
   resolveSliceFile,
+  resolveSlicePath,
   resolveTaskFile,
   resolveMilestoneFile,
   resolveTasksDir,
@@ -52,6 +53,17 @@ import { hasPendingCaptures, loadPendingCaptures, revertExecutorResolvedCaptures
 import { debugLog } from "./debug-logger.js";
 import { runSafely } from "./auto-utils.js";
 import type { AutoSession, SidecarItem } from "./auto/session.js";
+import { getEvidence } from "./safety/evidence-collector.js";
+import { validateFileChanges } from "./safety/file-change-validator.js";
+// crossReferenceEvidence available for future use when verification_evidence is stored in DB
+// import { crossReferenceEvidence, type ClaimedEvidence } from "./safety/evidence-cross-ref.js";
+import { validateContent } from "./safety/content-validator.js";
+import { resolveSafetyHarnessConfig } from "./safety/safety-harness.js";
+import { resolveExpectedArtifactPath as resolveArtifactForContent } from "./auto-artifact-paths.js";
+import { loadEffectiveGSDPreferences } from "./preferences.js";
+import { getSliceTasks } from "./gsd-db.js";
+import { runPreExecutionChecks, type PreExecutionResult } from "./pre-execution-checks.js";
+import { writePreExecutionEvidence } from "./verification-evidence.js";
 
 /** Maximum verification retry attempts before escalating to blocker placeholder (#2653). */
 const MAX_VERIFICATION_RETRIES = 3;
@@ -437,6 +449,87 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
       debugLog("postUnit", { phase: "rogue-detection", error: String(e) });
     }
 
+    // ── Safety harness: post-unit validation ──
+    try {
+      const { loadEffectiveGSDPreferences } = await import("./preferences.js");
+      const prefs = loadEffectiveGSDPreferences()?.preferences;
+      const safetyConfig = resolveSafetyHarnessConfig(
+        prefs?.safety_harness as Record<string, unknown> | undefined,
+      );
+
+      if (safetyConfig.enabled) {
+        const { milestone: sMid, slice: sSid, task: sTid } = parseUnitId(s.currentUnit.id);
+
+        // File change validation (execute-task only, after auto-commit)
+        if (safetyConfig.file_change_validation && s.currentUnit.type === "execute-task" && sMid && sSid && sTid && isDbAvailable()) {
+          try {
+            const taskRow = getTask(sMid, sSid, sTid);
+            if (taskRow) {
+              const expectedOutput = taskRow.expected_output ?? [];
+              const plannedFiles = taskRow.files ?? [];
+              const audit = validateFileChanges(s.basePath, expectedOutput, plannedFiles);
+              if (audit && audit.violations.length > 0) {
+                const warnings = audit.violations.filter(v => v.severity === "warning");
+                for (const v of warnings) {
+                  logWarning("safety", `file-change: ${v.file} — ${v.reason}`);
+                }
+                if (warnings.length > 0) {
+                  ctx.ui.notify(
+                    `Safety: ${warnings.length} unexpected file change(s) outside task plan`,
+                    "warning",
+                  );
+                }
+              }
+            }
+          } catch (e) {
+            debugLog("postUnit", { phase: "safety-file-change", error: String(e) });
+          }
+        }
+
+        // Evidence cross-reference (execute-task only)
+        // Verification evidence is passed via the complete-task tool call and
+        // stored in the SUMMARY.md on disk — not available as structured data
+        // in the DB. The evidence collector tracks actual bash tool calls, so
+        // we can still detect units that claimed success but ran no commands.
+        if (safetyConfig.evidence_cross_reference && s.currentUnit.type === "execute-task") {
+          try {
+            const actual = getEvidence();
+            const bashCalls = actual.filter(e => e.kind === "bash");
+            // If the task is marked complete but zero bash commands were run,
+            // it's suspicious — the LLM may have fabricated results.
+            if (sMid && sSid && sTid && isDbAvailable()) {
+              const taskRow = getTask(sMid, sSid, sTid);
+              if (taskRow?.status === "complete" && taskRow.verify && bashCalls.length === 0) {
+                logWarning("safety", "task marked complete with verification commands but no bash calls were executed");
+                ctx.ui.notify(
+                  `Safety: task ${sTid} has verification commands but no bash calls were recorded`,
+                  "warning",
+                );
+              }
+            }
+          } catch (e) {
+            debugLog("postUnit", { phase: "safety-evidence-xref", error: String(e) });
+          }
+        }
+
+        // Content validation (plan-slice, plan-milestone)
+        if (safetyConfig.content_validation) {
+          try {
+            const artifactPath = resolveArtifactForContent(s.currentUnit.type, s.currentUnit.id, s.basePath);
+            const contentViolations = validateContent(s.currentUnit.type, artifactPath);
+            for (const v of contentViolations) {
+              logWarning("safety", `content: ${v.reason}`);
+              ctx.ui.notify(`Content validation: ${v.reason}`, "warning");
+            }
+          } catch (e) {
+            debugLog("postUnit", { phase: "safety-content-validation", error: String(e) });
+          }
+        }
+      }
+    } catch (e) {
+      debugLog("postUnit", { phase: "safety-harness", error: String(e) });
+    }
+
     // Artifact verification
     let triggerArtifactVerified = false;
     if (!s.currentUnit.type.startsWith("hook/")) {
@@ -681,6 +774,123 @@ export async function postUnitPostVerification(pctx: PostUnitContext): Promise<"
       }
     } catch (e) {
       debugLog("postUnit", { phase: "capture-protection-error", error: String(e) });
+    }
+  }
+
+  // ── Pre-execution checks (after plan-slice completes) ──
+  if (
+    s.currentUnit &&
+    s.currentUnit.type === "plan-slice"
+  ) {
+    let preExecPauseNeeded = false;
+    await runSafely("postUnitPostVerification", "pre-execution-checks", async () => {
+      try {
+        // Check preferences — respect enhanced_verification and enhanced_verification_pre
+        const prefs = loadEffectiveGSDPreferences()?.preferences;
+        const enhancedEnabled = prefs?.enhanced_verification !== false; // default true
+        const preEnabled = prefs?.enhanced_verification_pre !== false;  // default true
+
+        if (!enhancedEnabled || !preEnabled) {
+          debugLog("postUnitPostVerification", {
+            phase: "pre-execution-checks",
+            skipped: true,
+            reason: "disabled by preferences",
+          });
+          return;
+        }
+
+        // Parse the unit ID to get milestone/slice IDs
+        const { milestone: mid, slice: sid } = parseUnitId(s.currentUnit!.id);
+        if (!mid || !sid) {
+          debugLog("postUnitPostVerification", {
+            phase: "pre-execution-checks",
+            skipped: true,
+            reason: "could not parse milestone/slice from unit ID",
+          });
+          return;
+        }
+
+        // Get tasks for this slice from DB
+        const tasks = getSliceTasks(mid, sid);
+        if (tasks.length === 0) {
+          debugLog("postUnitPostVerification", {
+            phase: "pre-execution-checks",
+            skipped: true,
+            reason: "no tasks found for slice",
+          });
+          return;
+        }
+
+        // Run pre-execution checks
+        const result: PreExecutionResult = await runPreExecutionChecks(tasks, s.basePath);
+
+        // Log summary to stderr in existing verification output format
+        const emoji = result.status === "pass" ? "✅" : result.status === "warn" ? "⚠️" : "❌";
+        process.stderr.write(
+          `gsd-pre-exec: ${emoji} Pre-execution checks ${result.status} for ${mid}/${sid} (${result.durationMs}ms)\n`,
+        );
+
+        // Log individual check results
+        for (const check of result.checks) {
+          const checkEmoji = check.passed ? "✓" : check.blocking ? "✗" : "⚠";
+          process.stderr.write(
+            `gsd-pre-exec:   ${checkEmoji} [${check.category}] ${check.target}: ${check.message}\n`,
+          );
+        }
+
+        // Write evidence JSON to slice artifacts directory
+        const slicePath = resolveSlicePath(s.basePath, mid, sid);
+        if (slicePath) {
+          writePreExecutionEvidence(result, slicePath, mid, sid);
+        }
+
+        // Notify UI
+        if (result.status === "fail") {
+          const blockingCount = result.checks.filter(c => !c.passed && c.blocking).length;
+          ctx.ui.notify(
+            `Pre-execution checks failed: ${blockingCount} blocking issue${blockingCount === 1 ? "" : "s"} found`,
+            "error",
+          );
+          preExecPauseNeeded = true;
+        } else if (result.status === "warn") {
+          ctx.ui.notify(
+            `Pre-execution checks passed with warnings`,
+            "warning",
+          );
+          // Strict mode: treat warnings as blocking
+          if (prefs?.enhanced_verification_strict === true) {
+            preExecPauseNeeded = true;
+          }
+        }
+
+        debugLog("postUnitPostVerification", {
+          phase: "pre-execution-checks",
+          status: result.status,
+          checkCount: result.checks.length,
+          durationMs: result.durationMs,
+        });
+      } catch (preExecError) {
+        // Fail-closed: if runPreExecutionChecks throws, pause auto-mode instead of silently continuing
+        const errorMessage = preExecError instanceof Error ? preExecError.message : String(preExecError);
+        debugLog("postUnitPostVerification", {
+          phase: "pre-execution-checks",
+          error: errorMessage,
+          failClosed: true,
+        });
+        logError("engine", `gsd-pre-exec: Pre-execution checks threw an error: ${errorMessage}`);
+        ctx.ui.notify(
+          `Pre-execution checks error: ${errorMessage} — pausing for human review`,
+          "error",
+        );
+        preExecPauseNeeded = true;
+      }
+    });
+
+    // Check for blocking failures after runSafely completes
+    if (preExecPauseNeeded) {
+      debugLog("postUnitPostVerification", { phase: "pre-execution-checks", pausing: true, reason: "blocking failures detected" });
+      await pauseAuto(ctx, pi);
+      return "stopped";
     }
   }
 

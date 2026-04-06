@@ -105,6 +105,11 @@ export const KNOWN_PREFERENCE_KEYS = new Set<string>([
   "experimental",
   "codebase",
   "slice_parallel",
+  "safety_harness",
+  "enhanced_verification",
+  "enhanced_verification_pre",
+  "enhanced_verification_post",
+  "enhanced_verification_strict",
 ]);
 
 /** Canonical list of all dispatch unit types. */
@@ -291,6 +296,42 @@ export interface GSDPreferences {
   codebase?: CodebaseMapPreferences;
   /** Slice-level parallelism within a milestone. Disabled by default. */
   slice_parallel?: { enabled?: boolean; max_workers?: number };
+  /** LLM safety harness configuration. Monitors, validates, and constrains LLM behavior during auto-mode. Enabled by default with warn-and-continue policy. */
+  safety_harness?: {
+    enabled?: boolean;
+    evidence_collection?: boolean;
+    file_change_validation?: boolean;
+    evidence_cross_reference?: boolean;
+    destructive_command_warnings?: boolean;
+    content_validation?: boolean;
+    checkpoints?: boolean;
+    auto_rollback?: boolean;
+    timeout_scale_cap?: number;
+  };
+
+  // ─── Enhanced Verification ──────────────────────────────────────────────────
+  /**
+   * Enable enhanced verification (both pre-execution and post-execution checks).
+   * Default: true (opt-out, not opt-in). Set false to disable all enhanced verification.
+   */
+  enhanced_verification?: boolean;
+  /**
+   * Enable pre-execution checks (package existence, file references, etc.).
+   * Only applies when enhanced_verification is true.
+   * Default: true.
+   */
+  enhanced_verification_pre?: boolean;
+  /**
+   * Enable post-execution checks (runtime error detection, audit warnings, etc.).
+   * Only applies when enhanced_verification is true.
+   * Default: true.
+   */
+  enhanced_verification_post?: boolean;
+  /**
+   * Strict mode: treat any pre-execution check failure as blocking.
+   * Default: false (warnings only for non-critical failures).
+   */
+  enhanced_verification_strict?: boolean;
 }
 
 export interface LoadedGSDPreferences {

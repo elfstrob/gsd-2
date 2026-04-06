@@ -6,6 +6,70 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.64.0] - 2026-04-06
+
+### Added
+- **gsd**: add LLM safety harness for auto-mode damage control
+- **ollama**: native /api/chat provider with full option exposure
+- **parallel**: slice-level parallelism with dependency-aware dispatch (#3315)
+- **mcp-client**: add OAuth auth provider for HTTP transport (#3295)
+
+### Fixed
+- **ui**: remove 200-column cap on welcome screen width
+- address adversarial review findings for #3576
+- **gsd**: replace hardcoded agent skill paths with dynamic resolution (#3575)
+- **headless**: sync resources and use agent dir for query
+- **cli**: show latest version and bypass npm cache in update check
+- **gsd**: follow CONTRIBUTING standards for #3565
+- **gsd**: address Codex adversarial review findings for #3565
+- **gsd**: coerce string arrays to objects in complete-slice/task tools (#3565)
+- **gsd**: harden flat-rate routing guard against alias/resolution gaps
+- **pi-coding-agent**: register models.json providers and await Ollama probe in headless mode
+- **ollama**: use apiKey auth mode to avoid streamSimple crash
+- **gsd**: disable dynamic model routing for flat-rate providers
+- **gsd**: address Codex adversarial review findings
+- **gsd**: prevent LLM from querying gsd.db directly via bash (#3541)
+- **gsd**: seed requirements table from REQUIREMENTS.md on first update
+- **gsd**: inject S##-CONTEXT.md from slice discussion into all prompt builders
+- **cli**: guard model re-apply against session restore and async rejection
+- **pi-coding-agent**: resolve model fallback race that ignores configured provider (#3534)
+- **detection**: add xcodegen and Xcode bundle support to project detection (#1882)
+- **perf**: share jiti module cache across extension loads (#3308)
+- **resource-sync**: prune removed bundled subdirectory extensions on upgrade (#1972)
+- recognize U+2705 checkmark emoji as completion marker in prose roadmaps (#1897)
+- **web**: use safePackageRootFromImportUrl for cross-platform package root (#1881) (#1893)
+- isolate CmuxClient stdio to prevent TUI hangs in CMUX (#3306)
+- worktree health check walks parent dirs for monorepo support (#3313)
+- **gsd**: promote milestone status from queued to active in plan-milestone (#3317)
+- **worktree**: correct merge failure notification command from /complete-milestone to /gsd dispatch complete-milestone (#1901)
+- detect and block Gemini CLI OAuth tokens used as API keys (#3296)
+- **auto**: break retry loop on tool invocation errors (malformed JSON) (#3298)
+- **git**: use git add -u in symlink .gsd fallback to prevent hang (#3299)
+- handle complete-slice context exhaustion to unblock downstream slices (#3300)
+- cap consecutive tool validation failures to prevent stuck-loop (#3301)
+- make enrichment tool params optional for limited-toolcall models (#3302)
+- add filesystem safety guard to complete-slice.md (#3304)
+- **extensions**: use bundledExtensionKeys for conflict detection instead of broken path heuristic (#3305)
+- scope tools during discuss flows to prevent grammar overflow (#3307)
+- **preferences**: warn on silent parse failure for non-frontmatter files (#3310)
+- track remote-questions in managed-resources manifest (#3312)
+- **auto**: add timeout guard for postUnitPostVerification in runFinalize (#3314)
+- **gsd**: handle large markdown parameters in complete-milestone JSON parsing (#3316)
+- **metrics**: deduplicate idle-watchdog entries and fix forensics false-positives (#1973)
+- prevent milestone/slice artifact rendering corruption (#3293)
+- **doctor**: strip --fix flag before positional parse (#1919) (#1926)
+- resolve external-state worktree DB path (#2952) (#3303)
+- **gsd**: worktree teardown path validation prevents data loss (#3311)
+- prevent auto-mode from dispatching deferred slices (#3309)
+- preserve completed slice status on plan-milestone re-plan (#3318)
+- reopen DB on cold resume, recognize heavy check mark (#3319)
+- dashboard model label shows dispatched model, not stale previous unit (#3320)
+
+### Changed
+- **gsd**: remove copyright line from test file
+- **gsd**: trim promptGuidelines to 1 line to reduce per-turn token cost
+- **web**: consolidate subprocess boilerplate into shared runner (#1899)
+
 ## [2.63.0] - 2026-04-05
 
 ### Added
@@ -2342,7 +2406,8 @@ Format based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 - License updated to MIT
 
-[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.63.0...HEAD
+[Unreleased]: https://github.com/gsd-build/gsd-2/compare/v2.64.0...HEAD
+[2.64.0]: https://github.com/gsd-build/gsd-2/compare/v2.63.0...v2.64.0
 [2.63.0]: https://github.com/gsd-build/gsd-2/compare/v2.62.1...v2.63.0
 [2.62.1]: https://github.com/gsd-build/gsd-2/compare/v2.62.0...v2.62.1
 [2.62.0]: https://github.com/gsd-build/gsd-2/compare/v2.61.0...v2.62.0

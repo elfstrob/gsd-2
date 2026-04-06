@@ -27,7 +27,7 @@ import { debugLog } from "../debug-logger.js";
 import { PROJECT_FILES } from "../detection.js";
 import { MergeConflictError } from "../git-service.js";
 import { join, basename, dirname, parse as parsePath } from "node:path";
-import { existsSync, cpSync } from "node:fs";
+import { existsSync, cpSync, readdirSync } from "node:fs";
 import { logWarning, logError } from "../workflow-logger.js";
 import { gsdRoot } from "../paths.js";
 import { atomicWriteSync } from "../atomic-write.js";
@@ -37,6 +37,9 @@ import { withTimeout, FINALIZE_POST_TIMEOUT_MS } from "./finalize-timeout.js";
 import { getEligibleSlices } from "../slice-parallel-eligibility.js";
 import { startSliceParallel } from "../slice-parallel-orchestrator.js";
 import { isDbAvailable, getMilestoneSlices } from "../gsd-db.js";
+import { resetEvidence } from "../safety/evidence-collector.js";
+import { createCheckpoint, cleanupCheckpoint, rollbackToCheckpoint } from "../safety/git-checkpoint.js";
+import { resolveSafetyHarnessConfig } from "../safety/safety-harness.js";
 
 // ─── generateMilestoneReport ──────────────────────────────────────────────────
 
@@ -1009,11 +1012,20 @@ export async function runUnitPhase(
     }
     const hasProjectFile = PROJECT_FILES.some((f) => deps.existsSync(join(s.basePath, f)));
     const hasSrcDir = deps.existsSync(join(s.basePath, "src"));
+    // Xcode bundles have project-specific names (*.xcodeproj, *.xcworkspace)
+    // that cannot be matched by exact filename — scan the directory by suffix.
+    let hasXcodeBundle = false;
+    try {
+      const entries = deps.existsSync(s.basePath) ? readdirSync(s.basePath) : [];
+      hasXcodeBundle = entries.some((e: string) => e.endsWith(".xcodeproj") || e.endsWith(".xcworkspace"));
+    } catch (err) {
+      debugLog("runUnitPhase", { phase: "xcode-bundle-scan-failed", basePath: s.basePath, error: String(err) });
+    }
     // Monorepo support (#2347): if no project files in the worktree directory,
     // walk parent directories up to the filesystem root. In monorepos,
     // package.json / Cargo.toml etc. live in a parent directory.
     let hasProjectFileInParent = false;
-    if (!hasProjectFile && !hasSrcDir) {
+    if (!hasProjectFile && !hasSrcDir && !hasXcodeBundle) {
       let checkDir = dirname(s.basePath);
       const { root } = parsePath(checkDir);
       while (checkDir !== root) {
@@ -1027,11 +1039,11 @@ export async function runUnitPhase(
         checkDir = dirname(checkDir);
       }
     }
-    if (!hasProjectFile && !hasSrcDir && !hasProjectFileInParent) {
+    if (!hasProjectFile && !hasSrcDir && !hasXcodeBundle && !hasProjectFileInParent) {
       // Greenfield projects won't have project files yet — the first task creates them.
       // Log a warning but allow execution to proceed. The .git check above is sufficient
       // to ensure we're in a valid working directory.
-      debugLog("runUnitPhase", { phase: "worktree-health-warn-greenfield", basePath: s.basePath, hasProjectFile, hasSrcDir });
+      debugLog("runUnitPhase", { phase: "worktree-health-warn-greenfield", basePath: s.basePath, hasProjectFile, hasSrcDir, hasXcodeBundle });
       ctx.ui.notify(`Warning: ${s.basePath} has no recognized project files — proceeding as greenfield project`, "warning");
     }
   }
@@ -1069,6 +1081,21 @@ export async function runUnitPhase(
   ctx.ui.setStatus("gsd-auto", "auto");
   if (mid)
     deps.updateSliceProgressCache(s.basePath, mid, state.activeSlice?.id);
+
+  // ── Safety harness: reset evidence + create checkpoint ──
+  const safetyConfig = resolveSafetyHarnessConfig(
+    prefs?.safety_harness as Record<string, unknown> | undefined,
+  );
+  if (safetyConfig.enabled && safetyConfig.evidence_collection) {
+    resetEvidence();
+  }
+  // Only checkpoint code-executing units (not lifecycle/planning units)
+  if (safetyConfig.enabled && safetyConfig.checkpoints && unitType === "execute-task") {
+    s.checkpointSha = createCheckpoint(s.basePath, unitId);
+    if (s.checkpointSha) {
+      debugLog("runUnitPhase", { phase: "checkpoint-created", unitId, sha: s.checkpointSha.slice(0, 8) });
+    }
+  }
 
   // Prompt injection
   let finalPrompt = prompt;
@@ -1366,6 +1393,27 @@ export async function runUnitPhase(
   }
 
   deps.emitJournalEvent({ ts: new Date().toISOString(), flowId: ic.flowId, seq: ic.nextSeq(), eventType: "unit-end", data: { unitType, unitId, status: unitResult.status, artifactVerified, ...(unitResult.errorContext ? { errorContext: unitResult.errorContext } : {}) }, causedBy: { flowId: ic.flowId, seq: unitStartSeq } });
+
+  // ── Safety harness: checkpoint cleanup or rollback ──
+  if (s.checkpointSha) {
+    if (unitResult.status === "error" && safetyConfig.auto_rollback) {
+      const rolled = rollbackToCheckpoint(s.basePath, unitId, s.checkpointSha);
+      if (rolled) {
+        ctx.ui.notify(`Rolled back to pre-unit checkpoint for ${unitId}`, "info");
+        debugLog("runUnitPhase", { phase: "checkpoint-rollback", unitId });
+      }
+    } else if (unitResult.status === "error") {
+      ctx.ui.notify(
+        `Unit ${unitId} failed. Pre-unit checkpoint available at ${s.checkpointSha.slice(0, 8)}`,
+        "warning",
+      );
+    } else {
+      // Success — clean up checkpoint ref
+      cleanupCheckpoint(s.basePath, unitId);
+      debugLog("runUnitPhase", { phase: "checkpoint-cleaned", unitId });
+    }
+    s.checkpointSha = null;
+  }
 
   return { action: "next", data: { unitStartedAt: s.currentUnit?.startedAt } };
 }
