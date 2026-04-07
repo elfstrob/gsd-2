@@ -28,6 +28,27 @@ function severityIcon(severity: NotifySeverity): string {
   }
 }
 
+/** Word-wrap plain text to fit within maxWidth columns. */
+function wrapText(text: string, maxWidth: number): string[] {
+  if (text.length <= maxWidth) return [text];
+  const words = text.split(/\s+/);
+  const lines: string[] = [];
+  let current = "";
+  for (const word of words) {
+    if (current.length === 0) {
+      current = word;
+    } else if (current.length + 1 + word.length <= maxWidth) {
+      current += " " + word;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current.length > 0) lines.push(current);
+  // If a single word exceeds maxWidth, truncate it
+  return lines.map((l) => l.length > maxWidth ? l.slice(0, maxWidth - 1) + "…" : l);
+}
+
 function formatTimestamp(ts: string): string {
   try {
     const d = new Date(ts);
@@ -157,9 +178,8 @@ export class GSDNotificationOverlay {
     }
 
     const content = this.buildContentLines(width);
-    const viewportHeight = Math.max(5, process.stdout.rows ? process.stdout.rows - 8 : 24);
-    const chromeHeight = 2; // top + bottom border
-    const visibleContentRows = Math.max(1, viewportHeight - chromeHeight);
+    const maxVisibleRows = Math.max(5, process.stdout.rows ? process.stdout.rows - 8 : 24) - 2;
+    const visibleContentRows = Math.min(content.length, maxVisibleRows);
     const maxScroll = Math.max(0, content.length - visibleContentRows);
     this.scrollOffset = Math.min(this.scrollOffset, maxScroll);
     const visibleContent = content.slice(this.scrollOffset, this.scrollOffset + visibleContentRows);
@@ -253,13 +273,21 @@ export class GSDNotificationOverlay {
       const time = th.fg("dim", formatTimestamp(entry.ts));
       const source = entry.source === "workflow-logger" ? th.fg("dim", " [engine]") : "";
 
-      // First line: icon + timestamp + source
-      const msgMaxWidth = contentWidth - 20;
-      const msg = entry.message.length > msgMaxWidth
-        ? entry.message.slice(0, msgMaxWidth - 1) + "…"
-        : entry.message;
+      // Measure actual prefix width for wrapping
+      const prefix = `${coloredIcon} ${time}${source}  `;
+      const prefixWidth = visibleWidth(prefix);
+      const msgMaxWidth = Math.max(10, contentWidth - prefixWidth);
 
-      lines.push(row(`${coloredIcon} ${time}${source}  ${msg}`));
+      // Wrap long messages onto continuation lines indented to align with message start
+      const msgLines = wrapText(entry.message, msgMaxWidth);
+      const indent = " ".repeat(prefixWidth);
+      for (let i = 0; i < msgLines.length; i++) {
+        if (i === 0) {
+          lines.push(row(`${prefix}${msgLines[i]}`));
+        } else {
+          lines.push(row(`${indent}${msgLines[i]}`));
+        }
+      }
     }
 
     return lines;
