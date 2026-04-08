@@ -409,6 +409,7 @@ function initSchema(db: DbAdapter, fileBacked: boolean): void {
     db.exec("CREATE INDEX IF NOT EXISTS idx_milestones_status ON milestones(status)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_quality_gates_pending ON quality_gates(milestone_id, slice_id, status)");
     db.exec("CREATE INDEX IF NOT EXISTS idx_verification_evidence_task ON verification_evidence(milestone_id, slice_id, task_id)");
+    db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_evidence_dedup ON verification_evidence(task_id, slice_id, milestone_id, command, verdict)");
 
     // v14 index — slice dependency lookups
     db.exec("CREATE INDEX IF NOT EXISTS idx_slice_deps_target ON slice_dependencies(milestone_id, depends_on_slice_id)");
@@ -449,6 +450,25 @@ function migrateSchema(db: DbAdapter): void {
   const row = db.prepare("SELECT MAX(version) as v FROM schema_version").get();
   const currentVersion = row ? (row["v"] as number) : 0;
   if (currentVersion >= SCHEMA_VERSION) return;
+
+  // Backup database before migration so a mid-migration crash doesn't
+  // leave a partially-migrated DB with no recovery path.
+  // WAL-safe: checkpoint first to flush WAL into the main DB file, then copy.
+  if (currentPath && currentPath !== ":memory:" && existsSync(currentPath)) {
+    try {
+      const backupPath = `${currentPath}.backup-v${currentVersion}`;
+      if (!existsSync(backupPath)) {
+        // Flush WAL to main DB file before copying — without this, the backup
+        // may be missing committed data that only exists in the -wal file.
+        try { db.exec("PRAGMA wal_checkpoint(TRUNCATE)"); } catch { /* checkpoint is best-effort */ }
+        copyFileSync(currentPath, backupPath);
+      }
+    } catch (backupErr) {
+      // Log but proceed — blocking migration leaves the DB stuck at an old
+      // schema version permanently on read-only or full filesystems.
+      logWarning("db", `Pre-migration backup failed: ${backupErr instanceof Error ? backupErr.message : String(backupErr)}`);
+    }
+  }
 
   db.exec("BEGIN");
   try {
@@ -722,6 +742,7 @@ function migrateSchema(db: DbAdapter): void {
       db.exec("CREATE INDEX IF NOT EXISTS idx_milestones_status ON milestones(status)");
       db.exec("CREATE INDEX IF NOT EXISTS idx_quality_gates_pending ON quality_gates(milestone_id, slice_id, status)");
       db.exec("CREATE INDEX IF NOT EXISTS idx_verification_evidence_task ON verification_evidence(milestone_id, slice_id, task_id)");
+      db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_verification_evidence_dedup ON verification_evidence(task_id, slice_id, milestone_id, command, verdict)");
       db.prepare("INSERT INTO schema_version (version, applied_at) VALUES (:version, :applied_at)").run({
         ":version": 13,
         ":applied_at": new Date().toISOString(),
@@ -997,9 +1018,21 @@ export function _resetProvider(): void {
 
 export function upsertDecision(d: Omit<Decision, "seq">): void {
   if (!currentDb) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
+  // Use ON CONFLICT DO UPDATE instead of INSERT OR REPLACE to preserve the
+  // seq column. INSERT OR REPLACE deletes then reinserts, resetting seq and
+  // corrupting decision ordering in DECISIONS.md after reconcile replay.
   currentDb.prepare(
-    `INSERT OR REPLACE INTO decisions (id, when_context, scope, decision, choice, rationale, revisable, made_by, superseded_by)
-     VALUES (:id, :when_context, :scope, :decision, :choice, :rationale, :revisable, :made_by, :superseded_by)`,
+    `INSERT INTO decisions (id, when_context, scope, decision, choice, rationale, revisable, made_by, superseded_by)
+     VALUES (:id, :when_context, :scope, :decision, :choice, :rationale, :revisable, :made_by, :superseded_by)
+     ON CONFLICT(id) DO UPDATE SET
+       when_context = excluded.when_context,
+       scope = excluded.scope,
+       decision = excluded.decision,
+       choice = excluded.choice,
+       rationale = excluded.rationale,
+       revisable = excluded.revisable,
+       made_by = excluded.made_by,
+       superseded_by = excluded.superseded_by`,
   ).run({
     ":id": d.id,
     ":when_context": d.when_context,
@@ -1119,7 +1152,9 @@ export function insertMilestone(m: {
   ).run({
     ":id": m.id,
     ":title": m.title ?? "",
-    ":status": m.status ?? "active",
+    // Default to "queued" — never auto-create milestones as "active" (#3380).
+    // Callers that need "active" must pass it explicitly.
+    ":status": m.status ?? "queued",
     ":depends_on": JSON.stringify(m.depends_on ?? []),
     ":created_at": new Date().toISOString(),
     ":vision": m.planning?.vision ?? "",
@@ -1349,6 +1384,13 @@ export function updateTaskStatus(milestoneId: string, sliceId: string, taskId: s
   });
 }
 
+export function setTaskBlockerDiscovered(milestoneId: string, sliceId: string, taskId: string, discovered: boolean): void {
+  if (!currentDb) return;
+  currentDb.prepare(
+    `UPDATE tasks SET blocker_discovered = :discovered WHERE milestone_id = :mid AND slice_id = :sid AND id = :tid`,
+  ).run({ ":discovered": discovered ? 1 : 0, ":mid": milestoneId, ":sid": sliceId, ":tid": taskId });
+}
+
 export function upsertTaskPlanning(milestoneId: string, sliceId: string, taskId: string, planning: Partial<TaskPlanningRecord>): void {
   if (!currentDb) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
   currentDb.prepare(
@@ -1543,7 +1585,7 @@ export function insertVerificationEvidence(e: {
 }): void {
   if (!currentDb) throw new GSDError(GSD_STALE_STATE, "gsd-db: No database open");
   currentDb.prepare(
-    `INSERT INTO verification_evidence (task_id, slice_id, milestone_id, command, exit_code, verdict, duration_ms, created_at)
+    `INSERT OR IGNORE INTO verification_evidence (task_id, slice_id, milestone_id, command, exit_code, verdict, duration_ms, created_at)
      VALUES (:task_id, :slice_id, :milestone_id, :command, :exit_code, :verdict, :duration_ms, :created_at)`,
   ).run({
     ":task_id": e.taskId,

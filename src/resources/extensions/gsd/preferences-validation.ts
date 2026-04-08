@@ -530,6 +530,14 @@ export function validatePreferences(preferences: GSDPreferences): {
       }
     }
 
+    if (p.worker_model !== undefined) {
+      if (typeof p.worker_model === "string" && p.worker_model.length > 0) {
+        parallel.worker_model = p.worker_model;
+      } else {
+        errors.push("parallel.worker_model must be a non-empty string");
+      }
+    }
+
     if (Object.keys(parallel).length > 0) {
       validated.parallel = parallel as unknown as import("./types.js").ParallelConfig;
     }
@@ -561,7 +569,15 @@ export function validatePreferences(preferences: GSDPreferences): {
         }
       }
 
-      const knownReKeys = new Set(["enabled", "max_parallel", "isolation_mode"]);
+      if (re.subagent_model !== undefined) {
+        if (typeof re.subagent_model === "string" && re.subagent_model.length > 0) {
+          validRe.subagent_model = re.subagent_model;
+        } else {
+          errors.push("reactive_execution.subagent_model must be a non-empty string");
+        }
+      }
+
+      const knownReKeys = new Set(["enabled", "max_parallel", "isolation_mode", "subagent_model"]);
       for (const key of Object.keys(re)) {
         if (!knownReKeys.has(key)) {
           warnings.push(`unknown reactive_execution key "${key}" — ignored`);
@@ -932,6 +948,34 @@ export function validatePreferences(preferences: GSDPreferences): {
       validated.enhanced_verification_strict = preferences.enhanced_verification_strict;
     } else {
       errors.push("enhanced_verification_strict must be a boolean");
+    }
+  }
+
+  // ─── Discuss Preparation ────────────────────────────────────────────
+  if (preferences.discuss_preparation !== undefined) {
+    if (typeof preferences.discuss_preparation === "boolean") {
+      validated.discuss_preparation = preferences.discuss_preparation;
+    } else {
+      errors.push("discuss_preparation must be a boolean");
+    }
+  }
+
+  // ─── Discuss Web Research ───────────────────────────────────────────
+  if (preferences.discuss_web_research !== undefined) {
+    if (typeof preferences.discuss_web_research === "boolean") {
+      validated.discuss_web_research = preferences.discuss_web_research;
+    } else {
+      errors.push("discuss_web_research must be a boolean");
+    }
+  }
+
+  // ─── Discuss Depth ──────────────────────────────────────────────────
+  if (preferences.discuss_depth !== undefined) {
+    const validDepths = new Set(["quick", "standard", "thorough"]);
+    if (typeof preferences.discuss_depth === "string" && validDepths.has(preferences.discuss_depth)) {
+      validated.discuss_depth = preferences.discuss_depth as GSDPreferences["discuss_depth"];
+    } else {
+      errors.push(`discuss_depth must be one of: quick, standard, thorough`);
     }
   }
 

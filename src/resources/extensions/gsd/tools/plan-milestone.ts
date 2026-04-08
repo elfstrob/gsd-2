@@ -48,13 +48,13 @@ export interface PlanMilestoneParams {
   keyRisks?: Array<{ risk: string; whyItMatters: string }>;
   /** @optional — defaults to [] when omitted */
   proofStrategy?: Array<{ riskOrUnknown: string; retireIn: string; whatWillBeProven: string }>;
-  /** @optional — defaults to "Not provided." when omitted */
+  /** @optional — defaults to "" when omitted */
   verificationContract?: string;
-  /** @optional — defaults to "Not provided." when omitted */
+  /** @optional — defaults to "" when omitted */
   verificationIntegration?: string;
-  /** @optional — defaults to "Not provided." when omitted */
+  /** @optional — defaults to "" when omitted */
   verificationOperational?: string;
-  /** @optional — defaults to "Not provided." when omitted */
+  /** @optional — defaults to "" when omitted */
   verificationUat?: string;
   /** @optional — defaults to [] when omitted */
   definitionOfDone?: string[];
@@ -168,10 +168,10 @@ function validateParams(params: PlanMilestoneParams): PlanMilestoneParams {
     successCriteria: params.successCriteria ? validateStringArray(params.successCriteria, "successCriteria") : [],
     keyRisks: params.keyRisks ? validateRiskEntries(params.keyRisks) : [],
     proofStrategy: params.proofStrategy ? validateProofStrategy(params.proofStrategy) : [],
-    verificationContract: params.verificationContract ?? "Not provided.",
-    verificationIntegration: params.verificationIntegration ?? "Not provided.",
-    verificationOperational: params.verificationOperational ?? "Not provided.",
-    verificationUat: params.verificationUat ?? "Not provided.",
+    verificationContract: params.verificationContract ?? "",
+    verificationIntegration: params.verificationIntegration ?? "",
+    verificationOperational: params.verificationOperational ?? "",
+    verificationUat: params.verificationUat ?? "",
     definitionOfDone: params.definitionOfDone ? validateStringArray(params.definitionOfDone, "definitionOfDone") : [],
     requirementCoverage: params.requirementCoverage ?? "Not provided.",
     boundaryMapMarkdown: params.boundaryMapMarkdown ?? "Not provided.",
@@ -256,7 +256,8 @@ export async function handlePlanMilestone(
         boundaryMapMarkdown: params.boundaryMapMarkdown,
       });
 
-      for (const slice of params.slices) {
+      for (let i = 0; i < params.slices.length; i++) {
+        const slice = params.slices[i]!;
         // Preserve completed/done status on re-plan (#2558).
         // Without this, a re-plan after milestone transition would reset
         // already-completed slices back to "pending".
@@ -272,6 +273,7 @@ export async function handlePlanMilestone(
           risk: slice.risk,
           depends: slice.depends,
           demo: slice.demo,
+          sequence: i + 1, // Preserve agent-ordered sequence (#3356)
         });
         upsertSlicePlanning(params.milestoneId, slice.sliceId, {
           goal: slice.goal,

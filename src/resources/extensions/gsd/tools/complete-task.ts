@@ -33,7 +33,7 @@ import { renderPlanCheckboxes } from "../markdown-renderer.js";
 import { renderAllProjections, renderSummaryContent } from "../workflow-projections.js";
 import { writeManifest } from "../workflow-manifest.js";
 import { appendEvent } from "../workflow-events.js";
-import { logWarning } from "../workflow-logger.js";
+import { logWarning, logError } from "../workflow-logger.js";
 
 export interface CompleteTaskResult {
   taskId: string;
@@ -43,6 +43,18 @@ export interface CompleteTaskResult {
 }
 
 import type { TaskRow } from "../gsd-db.js";
+
+/**
+ * Normalize a list parameter that may arrive as a string (newline-delimited
+ * bullet list from the LLM) into a string array (#3361).
+ */
+function normalizeListParam(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === "string" && value.trim()) {
+    return value.split(/\n/).map(s => s.replace(/^[\s\-*•]+/, "").trim()).filter(Boolean);
+  }
+  return [];
+}
 
 /**
  * Build a TaskRow-shaped object from CompleteTaskParams so the unified
@@ -63,8 +75,8 @@ function paramsToTaskRow(params: CompleteTaskParams, completedAt: string): TaskR
     blocker_discovered: params.blockerDiscovered ?? false,
     deviations: params.deviations ?? "",
     known_issues: params.knownIssues ?? "",
-    key_files: params.keyFiles ?? [],
-    key_decisions: params.keyDecisions ?? [],
+    key_files: normalizeListParam(params.keyFiles),
+    key_decisions: normalizeListParam(params.keyDecisions),
     full_summary_md: "",
     description: "",
     estimate: "",
@@ -140,8 +152,8 @@ export async function handleCompleteTask(
     }
 
     // All guards passed — perform writes
-    insertMilestone({ id: params.milestoneId });
-    insertSlice({ id: params.sliceId, milestoneId: params.milestoneId });
+    insertMilestone({ id: params.milestoneId, title: params.milestoneId });
+    insertSlice({ id: params.sliceId, milestoneId: params.milestoneId, title: params.sliceId });
     insertTask({
       id: params.taskId,
       sliceId: params.sliceId,
@@ -230,9 +242,19 @@ export async function handleCompleteTask(
   clearParseCache();
 
   // ── Post-mutation hook: projections, manifest, event log ───────────────
+  // Separate try/catch per step so a projection failure doesn't prevent
+  // the event log entry (critical for worktree reconciliation).
   try {
     await renderAllProjections(basePath, params.milestoneId);
+  } catch (projErr) {
+    logWarning("tool", `complete-task projection warning: ${(projErr as Error).message}`);
+  }
+  try {
     writeManifest(basePath);
+  } catch (mfErr) {
+    logWarning("tool", `complete-task manifest warning: ${(mfErr as Error).message}`);
+  }
+  try {
     appendEvent(basePath, {
       cmd: "complete-task",
       params: { milestoneId: params.milestoneId, sliceId: params.sliceId, taskId: params.taskId },
@@ -241,8 +263,8 @@ export async function handleCompleteTask(
       actor_name: params.actorName,
       trigger_reason: params.triggerReason,
     });
-  } catch (hookErr) {
-    logWarning("tool", `complete-task post-mutation hook warning: ${(hookErr as Error).message}`);
+  } catch (eventErr) {
+    logError("tool", `complete-task event log FAILED — completion invisible to reconciliation`, { error: (eventErr as Error).message });
   }
 
   return {

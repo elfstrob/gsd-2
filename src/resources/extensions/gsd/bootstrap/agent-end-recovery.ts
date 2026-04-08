@@ -95,12 +95,24 @@ export async function handleAgentEnd(
     return;
   }
   if (lastMsg && "stopReason" in lastMsg && lastMsg.stopReason === "error") {
-    const errorDetail = "errorMessage" in lastMsg && lastMsg.errorMessage ? `: ${lastMsg.errorMessage}` : "";
-    const errorMsg = ("errorMessage" in lastMsg && lastMsg.errorMessage) ? String(lastMsg.errorMessage) : "";
+    // #3588: errorMessage can be useless (e.g. "success") while the real error
+    // is in the assistant message text content. Fall back to content when
+    // errorMessage looks uninformative.
+    const rawErrorMsg = ("errorMessage" in lastMsg && lastMsg.errorMessage) ? String(lastMsg.errorMessage) : "";
+    const isUseless = !rawErrorMsg || /^(success|ok|true|error|unknown)$/i.test(rawErrorMsg.trim());
+    // #3588: When errorMessage is uninformative, extract the real error from
+    // the assistant message text content for display purposes only.
+    // Classification still uses rawErrorMsg to avoid false positives from prose.
+    let displayMsg = rawErrorMsg;
+    if (isUseless && "content" in lastMsg && Array.isArray(lastMsg.content)) {
+      const textBlock = lastMsg.content.find((b: any) => b.type === "text" && b.text);
+      if (textBlock) displayMsg = (textBlock as any).text.slice(0, 300);
+    }
+    const errorDetail = displayMsg ? `: ${displayMsg}` : "";
     const explicitRetryAfterMs = ("retryAfterMs" in lastMsg && typeof lastMsg.retryAfterMs === "number") ? lastMsg.retryAfterMs : undefined;
 
-    // ── 1. Classify ──────────────────────────────────────────────────────
-    const cls = classifyError(errorMsg, explicitRetryAfterMs);
+    // ── 1. Classify using rawErrorMsg to avoid prose false-positives ────
+    const cls = classifyError(rawErrorMsg, explicitRetryAfterMs);
 
     // Cap rate-limit backoff for CLI-style providers (openai-codex, google-gemini-cli)
     // which use per-user quotas with shorter windows (#2922).

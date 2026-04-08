@@ -188,8 +188,10 @@ function clearProjectRootStateFiles(basePath: string, milestoneId: string): void
     try {
       unlinkSync(file);
     } catch (err) {
-      /* non-fatal — file may not exist */
-      logWarning("worktree", `file unlink failed: ${err instanceof Error ? err.message : String(err)}`);
+      // ENOENT is expected — file may not exist (#3597)
+      if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
+        logWarning("worktree", `file unlink failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 
@@ -218,8 +220,11 @@ function clearProjectRootStateFiles(basePath: string, milestoneId: string): void
             try {
               unlinkSync(join(basePath, f));
             } catch (err) {
-              /* non-fatal */
-              logWarning("worktree", `untracked file unlink failed: ${err instanceof Error ? err.message : String(err)}`);
+              // ENOENT/EISDIR are expected for already-removed or directory entries (#3597)
+              const code = (err as NodeJS.ErrnoException).code;
+              if (code !== "ENOENT" && code !== "EISDIR") {
+                logWarning("worktree", `untracked file unlink failed: ${err instanceof Error ? err.message : String(err)}`);
+              }
             }
           }
         }
@@ -770,6 +775,9 @@ export function syncWorktreeStateBack(
       .map((d) => d.name);
 
     for (const mid of wtMilestones) {
+      // Skip the current milestone being merged — its files are already in the
+      // milestone branch and would conflict with the squash merge (#3641).
+      if (mid === milestoneId) continue;
       syncMilestoneDir(wtGsd, mainGsd, mid, synced);
     }
   } catch (err) {
@@ -1049,12 +1057,20 @@ export function createAutoWorktree(
       reuseExistingBranch: true,
     });
   } else {
-    // Fresh start — create branch from integration branch
+    // Fresh start — create branch from integration branch.
+    // Use the same 3-tier fallback as mergeMilestoneToMain (#3461):
+    //   1. META.json integration branch (explicit per-milestone override)
+    //   2. git.main_branch preference (user's configured working branch)
+    //   3. nativeDetectMainBranch (origin/HEAD auto-detection)
+    // Without tier 2, projects with main_branch=dev but origin/HEAD→master
+    // would fork worktrees from the wrong (stale) branch.
     const integrationBranch =
       readIntegrationBranch(basePath, milestoneId) ?? undefined;
+    const gitPrefs = loadEffectiveGSDPreferences()?.preferences?.git;
+    const startPoint = integrationBranch ?? gitPrefs?.main_branch ?? undefined;
     info = createWorktree(basePath, milestoneId, {
       branch,
-      startPoint: integrationBranch,
+      startPoint,
     });
   }
 
@@ -1453,8 +1469,13 @@ export function mergeMilestoneToMain(
     originalBasePath_,
     milestoneId,
   );
+  // Validate prefs.main_branch exists before using it — a stale preference
+  // (e.g. "master" when repo uses "main") causes merge failure (#3589).
+  const validatedPrefBranch = prefs.main_branch && nativeBranchExists(originalBasePath_, prefs.main_branch)
+    ? prefs.main_branch
+    : undefined;
   const mainBranch =
-    integrationBranch ?? prefs.main_branch ?? nativeDetectMainBranch(originalBasePath_);
+    integrationBranch ?? validatedPrefBranch ?? nativeDetectMainBranch(originalBasePath_);
 
   // Remove transient project-root state files before any branch or merge
   // operation. Untracked milestone metadata can otherwise block squash merges.

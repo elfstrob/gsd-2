@@ -23,7 +23,7 @@ import { invalidateStateCache } from "../state.js";
 import { renderAllProjections, stripIdPrefix } from "../workflow-projections.js";
 import { writeManifest } from "../workflow-manifest.js";
 import { appendEvent } from "../workflow-events.js";
-import { logWarning } from "../workflow-logger.js";
+import { logWarning, logError } from "../workflow-logger.js";
 
 export interface CompleteMilestoneParams {
   milestoneId: string;
@@ -218,9 +218,19 @@ export async function handleCompleteMilestone(
   clearParseCache();
 
   // ── Post-mutation hook: projections, manifest, event log ───────────────
+  // Separate try/catch per step so a projection failure doesn't prevent
+  // the event log entry (critical for worktree reconciliation).
   try {
     await renderAllProjections(basePath, params.milestoneId);
+  } catch (projErr) {
+    logWarning("tool", `complete-milestone projection warning: ${(projErr as Error).message}`);
+  }
+  try {
     writeManifest(basePath);
+  } catch (mfErr) {
+    logWarning("tool", `complete-milestone manifest warning: ${(mfErr as Error).message}`);
+  }
+  try {
     appendEvent(basePath, {
       cmd: "complete-milestone",
       params: { milestoneId: params.milestoneId },
@@ -229,8 +239,8 @@ export async function handleCompleteMilestone(
       actor_name: params.actorName,
       trigger_reason: params.triggerReason,
     });
-  } catch (hookErr) {
-    logWarning("tool", `complete-milestone post-mutation hook warning: ${(hookErr as Error).message}`);
+  } catch (eventErr) {
+    logError("tool", `complete-milestone event log FAILED — completion invisible to reconciliation`, { error: (eventErr as Error).message });
   }
 
   return {

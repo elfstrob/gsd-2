@@ -30,7 +30,7 @@ import { renderRoadmapCheckboxes } from "../markdown-renderer.js";
 import { renderAllProjections } from "../workflow-projections.js";
 import { writeManifest } from "../workflow-manifest.js";
 import { appendEvent } from "../workflow-events.js";
-import { logWarning } from "../workflow-logger.js";
+import { logWarning, logError } from "../workflow-logger.js";
 
 export interface CompleteSliceResult {
   sliceId: string;
@@ -233,8 +233,18 @@ export async function handleCompleteSlice(
     return { error: ownershipErr };
   }
 
+  // ── Verification content gate (#3580) ──────────────────────────────────
+  // Reject completion when the provided verification/UAT clearly indicates
+  // the slice is blocked or failed. Prevents prompt regressions from
+  // silently advancing blocked slices.
+  const BLOCKED_SIGNALS = /\b(status:\s*blocked|verification_result:\s*failed|slice is blocked|cannot complete|verification failed)\b/i;
+  if (BLOCKED_SIGNALS.test(params.verification || "") || BLOCKED_SIGNALS.test(params.uatContent || "")) {
+    return { error: `slice verification indicates blocked/failed state — do not complete a slice that has not passed verification. Address the blockers and re-verify first.` };
+  }
+
   // ── Guards + DB writes inside a single transaction (prevents TOCTOU) ───
   const completedAt = new Date().toISOString();
+  const originalSliceStatus = getSlice(params.milestoneId, params.sliceId)?.status ?? "pending";
   let guardError: string | null = null;
 
   transaction(() => {
@@ -268,8 +278,8 @@ export async function handleCompleteSlice(
     }
 
     // All guards passed — perform writes
-    insertMilestone({ id: params.milestoneId });
-    insertSlice({ id: params.sliceId, milestoneId: params.milestoneId });
+    insertMilestone({ id: params.milestoneId, title: params.milestoneId });
+    insertSlice({ id: params.sliceId, milestoneId: params.milestoneId, title: params.sliceId });
     updateSliceStatus(params.milestoneId, params.sliceId, "complete", completedAt);
   });
 
@@ -312,7 +322,7 @@ export async function handleCompleteSlice(
   } catch (renderErr) {
     // Disk render failed — roll back DB status so state stays consistent
     logWarning("tool", `complete_slice — disk render failed for ${params.milestoneId}/${params.sliceId}, rolling back DB status`, { error: (renderErr as Error).message });
-    updateSliceStatus(params.milestoneId, params.sliceId, 'pending');
+    updateSliceStatus(params.milestoneId, params.sliceId, originalSliceStatus);
     invalidateStateCache();
     return { error: `disk render failed: ${(renderErr as Error).message}` };
   }
@@ -326,9 +336,19 @@ export async function handleCompleteSlice(
   clearParseCache();
 
   // ── Post-mutation hook: projections, manifest, event log ───────────────
+  // Separate try/catch per step so a projection failure doesn't prevent
+  // the event log entry (critical for worktree reconciliation).
   try {
     await renderAllProjections(basePath, params.milestoneId);
+  } catch (projErr) {
+    logWarning("tool", `complete-slice projection warning for ${params.milestoneId}/${params.sliceId}: ${(projErr as Error).message}`);
+  }
+  try {
     writeManifest(basePath);
+  } catch (mfErr) {
+    logWarning("tool", `complete-slice manifest warning: ${(mfErr as Error).message}`);
+  }
+  try {
     appendEvent(basePath, {
       cmd: "complete-slice",
       params: { milestoneId: params.milestoneId, sliceId: params.sliceId },
@@ -337,8 +357,8 @@ export async function handleCompleteSlice(
       actor_name: params.actorName,
       trigger_reason: params.triggerReason,
     });
-  } catch (hookErr) {
-    logWarning("tool", `complete-slice post-mutation hook failed for ${params.milestoneId}/${params.sliceId}`, { error: (hookErr as Error).message });
+  } catch (eventErr) {
+    logError("tool", `complete-slice event log FAILED — completion invisible to reconciliation`, { error: (eventErr as Error).message });
   }
 
   return {

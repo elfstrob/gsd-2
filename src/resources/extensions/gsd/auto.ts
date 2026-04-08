@@ -76,6 +76,7 @@ import {
   hasInteractiveToolInFlight,
   clearInFlightTools,
   isToolInvocationError,
+  isQueuedUserMessageSkip,
 } from "./auto-tool-tracking.js";
 import { closeoutUnit } from "./auto-unit-closeout.js";
 import { recoverTimedOutUnit } from "./auto-timeout-recovery.js";
@@ -397,7 +398,7 @@ export function markToolEnd(toolCallId: string): void {
  */
 export function recordToolInvocationError(toolName: string, errorMsg: string): void {
   if (!s.active) return;
-  if (isToolInvocationError(errorMsg)) {
+  if (isToolInvocationError(errorMsg) || isQueuedUserMessageSkip(errorMsg)) {
     s.lastToolInvocationError = `${toolName}: ${errorMsg}`;
   }
 }
@@ -1140,9 +1141,9 @@ export async function startAuto(
           s.stepMode = meta.stepMode ?? requestedStepMode;
           s.autoStartTime = meta.autoStartTime || Date.now();
           s.paused = true;
-          try { unlinkSync(pausedPath); } catch (err) { /* non-fatal */
-            logWarning("session", `pause file cleanup failed: ${err instanceof Error ? err.message : String(err)}`, { file: "auto.ts" });
-          }
+          // Don't delete pause file yet — defer until lock is acquired.
+          // If lock fails, the file must survive for retry.
+          s.pausedSessionFile = pausedPath;
           ctx.ui.notify(
             `Resuming paused custom workflow${meta.activeRunDir ? ` (${meta.activeRunDir})` : ""}.`,
             "info",
@@ -1166,10 +1167,9 @@ export async function startAuto(
             s.stepMode = meta.stepMode ?? requestedStepMode;
             s.autoStartTime = meta.autoStartTime || Date.now();
             s.paused = true;
-            // Clean up the persisted file — we're consuming it
-            try { unlinkSync(pausedPath); } catch (err) { /* non-fatal */
-            logWarning("session", `pause file cleanup failed: ${err instanceof Error ? err.message : String(err)}`, { file: "auto.ts" });
-          }
+            // Don't delete pause file yet — defer until lock is acquired.
+            // If lock fails, the file must survive for retry.
+            s.pausedSessionFile = pausedPath;
             ctx.ui.notify(
               `Resuming paused session for ${meta.milestoneId}${meta.worktreePath ? ` (worktree)` : ""}.`,
               "info",
@@ -1186,8 +1186,19 @@ export async function startAuto(
   if (s.paused) {
     const resumeLock = acquireSessionLock(base);
     if (!resumeLock.acquired) {
+      // Reset paused state so isAutoPaused() doesn't stick true after lock failure.
+      // Pause file is preserved on disk for retry — not deleted.
+      s.paused = false;
       ctx.ui.notify(`Cannot resume: ${resumeLock.reason}`, "error");
       return;
+    }
+
+    // Lock acquired — now safe to delete the pause file
+    if (s.pausedSessionFile) {
+      try { unlinkSync(s.pausedSessionFile); } catch (err) {
+        logWarning("session", `pause file cleanup failed: ${err instanceof Error ? err.message : String(err)}`, { file: "auto.ts" });
+      }
+      s.pausedSessionFile = null;
     }
 
     s.paused = false;

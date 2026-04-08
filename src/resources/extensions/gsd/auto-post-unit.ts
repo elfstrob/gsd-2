@@ -39,7 +39,7 @@ import {
 } from "./auto-recovery.js";
 import { regenerateIfMissing } from "./workflow-projections.js";
 import { syncStateToProjectRoot } from "./auto-worktree.js";
-import { isDbAvailable, getTask, getSlice, getMilestone, updateTaskStatus, _getAdapter } from "./gsd-db.js";
+import { isDbAvailable, getTask, getSlice, getMilestone, updateTaskStatus, updateSliceStatus, _getAdapter } from "./gsd-db.js";
 import { renderPlanCheckboxes } from "./markdown-renderer.js";
 import { consumeSignal } from "./session-status-io.js";
 import {
@@ -161,7 +161,14 @@ export function detectRogueFileWrites(
 
     const dbRow = getSlice(mid, sid);
     if (!dbRow || dbRow.status !== "complete") {
-      rogues.push({ path: summaryPath, unitType, unitId });
+      // Auto-remediate: SUMMARY exists on disk but DB is stale — sync DB to
+      // match filesystem instead of reporting as rogue (#3633).
+      try {
+        updateSliceStatus(mid, sid, "complete", new Date().toISOString());
+      } catch {
+        // If DB update fails, fall back to rogue detection so the issue is visible
+        rogues.push({ path: summaryPath, unitType, unitId });
+      }
     }
   } else if (unitType === "plan-milestone") {
     if (!mid) return [];
@@ -582,11 +589,14 @@ export async function postUnitPreVerification(pctx: PostUnitContext, opts?: PreV
           "error",
         );
       } else if (!triggerArtifactVerified) {
-        // #2883: If the artifact is missing because the tool invocation itself
-        // failed (malformed/truncated JSON arguments), retrying will produce the
-        // same failure. Pause auto-mode instead of entering a stuck retry loop.
+        // #2883/#3595: If the artifact is missing because the tool invocation
+        // failed (malformed JSON) or was skipped (queued user message), retrying
+        // will produce the same failure. Pause auto-mode instead of looping.
         if (s.lastToolInvocationError) {
-          const errMsg = `Tool invocation failed for ${s.currentUnit.type}: ${s.lastToolInvocationError}. Structured argument generation failed — pausing auto-mode.`;
+          const isUserSkip = /queued user message/i.test(s.lastToolInvocationError);
+          const errMsg = isUserSkip
+            ? `Tool skipped for ${s.currentUnit.type}: ${s.lastToolInvocationError}. Queued user message interrupted the turn — pausing auto-mode.`
+            : `Tool invocation failed for ${s.currentUnit.type}: ${s.lastToolInvocationError}. Structured argument generation failed — pausing auto-mode.`;
           debugLog("postUnit", { phase: "tool-invocation-error-pause", unitType: s.currentUnit.type, unitId: s.currentUnit.id, error: s.lastToolInvocationError });
           ctx.ui.notify(errMsg, "error");
           s.lastToolInvocationError = null;

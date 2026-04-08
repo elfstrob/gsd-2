@@ -66,6 +66,17 @@ function parseTableSlices(section: string): RoadmapSliceEntry[] {
   const lines = section.split("\n");
   const slices: RoadmapSliceEntry[] = [];
 
+  // Detect dependency column index from the header row (#3383, #3336).
+  // Only parse deps from this column (or cells with explicit "depends"/"deps" keywords).
+  let depColumnIndex = -1;
+  for (const line of lines) {
+    if (!line.includes("|")) continue;
+    if (/S\d+/.test(line)) break; // reached data rows
+    const headerCells = line.split("|").map(c => c.trim()).filter(Boolean);
+    depColumnIndex = headerCells.findIndex(c => /^(depends|deps|depend)/i.test(c));
+    if (depColumnIndex >= 0) break;
+  }
+
   for (const line of lines) {
     // Skip non-table lines, separator lines (|---|---|), and header rows
     if (!line.includes("|")) continue;
@@ -95,12 +106,17 @@ function parseTableSlices(section: string): RoadmapSliceEntry[] {
       if (/\bmedium\b/.test(cellLower) || /\bmed\b/.test(cellLower)) { risk = "medium"; break; }
     }
 
-    // Extract dependencies from cells containing S-prefixed IDs (excluding the slice's own ID)
+    // Extract dependencies only from the dependency column or cells with
+    // explicit "depends"/"deps" keywords — never from title cells (#3383).
     let depends: string[] = [];
-    for (const cell of cells) {
-      if (/depends|deps/i.test(cell) || (cell.match(/S\d+/g)?.length ?? 0) > 0) {
-        const depIds = (cell.match(/S\d+/g) ?? []).filter(d => d !== id);
-        if (depIds.length > 0 || /none|—|-/i.test(cell)) {
+    if (depColumnIndex >= 0 && cells[depColumnIndex]) {
+      const depCell = cells[depColumnIndex]!;
+      const depIds = (depCell.match(/S\d+/g) ?? []).filter(d => d !== id);
+      depends = expandDependencies(depIds);
+    } else {
+      for (const cell of cells) {
+        if (/depends|deps/i.test(cell)) {
+          const depIds = (cell.match(/S\d+/g) ?? []).filter(d => d !== id);
           depends = expandDependencies(depIds);
           break;
         }
