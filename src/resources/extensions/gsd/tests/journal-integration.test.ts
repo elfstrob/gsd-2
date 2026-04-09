@@ -72,7 +72,7 @@ function makeMockDeps(
     getCurrentBranch: () => "main",
     autoWorktreeBranch: () => "auto/M001",
     resolveMilestoneFile: () => null,
-    reconcileMergeState: () => false,
+    reconcileMergeState: () => "clean",
     getLedger: () => ({ units: [] }),
     getProjectTotals: () => ({ cost: 0 }),
     formatCost: (c: number) => `$${c.toFixed(2)}`,
@@ -590,9 +590,9 @@ test("unit-end event contains errorContext when unit is cancelled with structure
   resolveAgentEndCancelled({ message: "Hard timeout error: exceeded limit", category: "timeout", isTransient: true });
 
   const result = await unitPromise;
-  // Cancelled units break the loop before emitting unit-end
+  // Transient timeout cancellations pause (recoverable) instead of hard-stopping
   assert.equal(result.action, "break");
-  assert.equal((result as any).reason, "session-failed");
+  assert.equal((result as any).reason, "session-timeout");
 
   // Verify error classification used structured errorContext on the window entry
   const entry = loopState.recentUnits[loopState.recentUnits.length - 1];
